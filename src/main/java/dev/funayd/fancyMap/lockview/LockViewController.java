@@ -160,6 +160,20 @@ public final class LockViewController {
             return false;
         }
 
+        restartActiveSessions();
+        return true;
+    }
+
+    /** Reloads YAML, textures and all currently open map sessions. */
+    public void reload() {
+        plugin.reloadConfig();
+        mapConfig.reload();
+        textureManager.reload();
+        restartActiveSessions();
+    }
+
+    /** Rebuilds every session so new runtime settings take effect. */
+    private void restartActiveSessions() {
         for (UUID playerId : new ArrayList<>(states.keySet())) {
             Player player = Bukkit.getPlayer(playerId);
             if (player != null && player.isOnline()) {
@@ -167,7 +181,6 @@ public final class LockViewController {
                 lock(player);
             }
         }
-        return true;
     }
 
     /**
@@ -437,6 +450,15 @@ public final class LockViewController {
             LockViewState current = stateFor(player);
             if (current == state && player.isOnline()) {
                 send(player, new WrapperPlayServerHeldItemChange(slot));
+            }
+        });
+    }
+
+    /** Closes the map from a Shift packet on the server main thread. */
+    void closeFromInput(Player player, LockViewState state) {
+        plugin.getServer().getScheduler().runTask(plugin, () -> {
+            if (states.get(player.getUniqueId()) == state && player.isOnline()) {
+                unlock(player);
             }
         });
     }

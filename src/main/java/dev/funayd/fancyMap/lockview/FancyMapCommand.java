@@ -34,6 +34,12 @@ public final class FancyMapCommand implements CommandExecutor, TabCompleter {
             String label,
             String[] args
     ) {
+        if (args.length == 1 && args[0].equalsIgnoreCase("reload")) {
+            lockViewController.reload();
+            sender.sendMessage(FancyMapMessages.text("Reloaded config and textures."));
+            return true;
+        }
+
         if (!(sender instanceof Player player)) {
             sender.sendMessage(FancyMapMessages.text("Lệnh này chỉ dành cho người chơi."));
             return true;
@@ -87,7 +93,7 @@ public final class FancyMapCommand implements CommandExecutor, TabCompleter {
             String[] args
     ) {
         if (args.length == 1) {
-            return partialMatches(List.of("config", "debug"), args[0]);
+            return partialMatches(List.of("config", "debug", "reload"), args[0]);
         }
         if (args.length == 2 && args[0].equalsIgnoreCase("config")) {
             return partialMatches(lockViewController.configKeys(), args[1]);

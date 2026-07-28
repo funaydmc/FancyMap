@@ -84,24 +84,17 @@ public final class MapConfig {
             aliases.put(normalize(keyAlias), canonical);
         }
 
-        String path = "map." + canonical;
-        double value;
-        if (plugin.getConfig().contains(path)) {
-            value = plugin.getConfig().getDouble(path);
-        } else {
-            String legacyPath = "lockview." + canonical;
-            value = plugin.getConfig().contains(legacyPath)
-                    ? plugin.getConfig().getDouble(legacyPath)
-                    : defaultValue;
-            plugin.getConfig().set(path, value);
-            dirty = true;
+        values.put(canonical, readValue(canonical, settings.get(canonical)));
+        saveIfDirty();
+    }
+
+    /** Reloads all currently registered values from the active Bukkit config. */
+    public void reload() {
+        dirty = false;
+        for (Map.Entry<String, DoubleSetting> entry : settings.entrySet()) {
+            values.put(entry.getKey(), readValue(entry.getKey(), entry.getValue()));
         }
-        if (!isValid(value, positive)) {
-            value = defaultValue;
-            plugin.getConfig().set(path, value);
-            dirty = true;
-        }
-        values.put(canonical, value);
+        normalizeZoomBounds();
         saveIfDirty();
     }
 
@@ -200,6 +193,28 @@ public final class MapConfig {
     /** Validates one registered numeric value. */
     private boolean isValid(double value, boolean positive) {
         return Double.isFinite(value) && (!positive || value > 0.0D);
+    }
+
+    /** Reads one setting from its current path or its legacy path. */
+    private double readValue(String canonical, DoubleSetting setting) {
+        String path = "map." + canonical;
+        double value;
+        if (plugin.getConfig().contains(path)) {
+            value = plugin.getConfig().getDouble(path);
+        } else {
+            String legacyPath = "lockview." + canonical;
+            value = plugin.getConfig().contains(legacyPath)
+                    ? plugin.getConfig().getDouble(legacyPath)
+                    : setting.defaultValue();
+            plugin.getConfig().set(path, value);
+            dirty = true;
+        }
+        if (!isValid(value, setting.positive())) {
+            value = setting.defaultValue();
+            plugin.getConfig().set(path, value);
+            dirty = true;
+        }
+        return value;
     }
 
     /** Persists defaults added during dynamic registration. */

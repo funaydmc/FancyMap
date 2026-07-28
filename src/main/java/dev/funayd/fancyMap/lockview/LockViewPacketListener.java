@@ -71,6 +71,7 @@ final class LockViewPacketListener implements PacketListener {
             if (packet.isShift()) {
                 packet.setShift(false);
                 event.markForReEncode(true);
+                controller.closeFromInput(player, state);
             }
             return;
         }

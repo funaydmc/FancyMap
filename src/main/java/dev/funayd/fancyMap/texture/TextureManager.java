@@ -18,8 +18,8 @@ public final class TextureManager {
 
     private final JavaPlugin plugin;
     private final Path textureDirectory;
-    private final MapTexture cursor;
-    private final MapTexture player;
+    private volatile MapTexture cursor;
+    private volatile MapTexture player;
 
     /**
      * Creates the texture directory and loads its two built-in textures.
@@ -29,6 +29,11 @@ public final class TextureManager {
     public TextureManager(JavaPlugin plugin) {
         this.plugin = plugin;
         textureDirectory = plugin.getDataFolder().toPath().resolve("textures");
+        reload();
+    }
+
+    /** Reloads both PNG files from the user texture directory. */
+    public void reload() {
         createDirectory();
         cursor = loadOrCreate(CURSOR_FILE, defaultCursor());
         player = loadOrCreate(PLAYER_FILE, defaultPlayer());
