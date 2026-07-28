@@ -11,19 +11,22 @@ import java.util.List;
 import java.util.Locale;
 import java.util.stream.Collectors;
 
+/**
+ * Command executor and tab completer for the FancyMap command.
+ */
 public final class FancyMapCommand implements CommandExecutor, TabCompleter {
-    private static final List<String> CONFIG_KEYS = List.of(
-            "map-distance",
-            "map-horizontal-offset",
-            "map-vertical-offset"
-    );
-
     private final LockViewController lockViewController;
 
+    /**
+     * Creates a command bound to a lock controller.
+     *
+     * @param lockViewController lock controller
+     */
     public FancyMapCommand(LockViewController lockViewController) {
         this.lockViewController = lockViewController;
     }
 
+    /** Executes toggle, debug and config subcommands. */
     @Override
     public boolean onCommand(
             CommandSender sender,
@@ -75,6 +78,7 @@ public final class FancyMapCommand implements CommandExecutor, TabCompleter {
         return true;
     }
 
+    /** Completes command subcommands and supported configuration keys. */
     @Override
     public List<String> onTabComplete(
             CommandSender sender,
@@ -86,11 +90,12 @@ public final class FancyMapCommand implements CommandExecutor, TabCompleter {
             return partialMatches(List.of("config", "debug"), args[0]);
         }
         if (args.length == 2 && args[0].equalsIgnoreCase("config")) {
-            return partialMatches(CONFIG_KEYS, args[1]);
+            return partialMatches(lockViewController.configKeys(), args[1]);
         }
         return List.of();
     }
 
+    /** Filters completion values by the current argument prefix. */
     private List<String> partialMatches(List<String> values, String input) {
         String prefix = input.toLowerCase(Locale.ROOT);
         return values.stream()

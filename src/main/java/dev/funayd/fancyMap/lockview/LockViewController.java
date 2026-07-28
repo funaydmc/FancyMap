@@ -3,25 +3,27 @@ package dev.funayd.fancyMap.lockview;
 import dev.funayd.fancyMap.FancyMapMessages;
 import dev.funayd.fancyMap.map.MapConfig;
 import dev.funayd.fancyMap.map.MapOverlay;
+import dev.funayd.fancyMap.map.PersistentChunkRenderCache;
+import dev.funayd.fancyMap.packet.PacketLocations;
+import dev.funayd.fancyMap.texture.TextureManager;
 import com.github.retrooper.packetevents.PacketEvents;
-import com.github.retrooper.packetevents.event.PacketListener;
 import com.github.retrooper.packetevents.event.PacketListenerCommon;
 import com.github.retrooper.packetevents.event.PacketListenerPriority;
-import com.github.retrooper.packetevents.event.PacketReceiveEvent;
 import com.github.retrooper.packetevents.protocol.entity.data.EntityData;
 import com.github.retrooper.packetevents.protocol.entity.data.EntityDataTypes;
 import com.github.retrooper.packetevents.protocol.entity.type.EntityTypes;
-import com.github.retrooper.packetevents.protocol.packettype.PacketType;
-import com.github.retrooper.packetevents.protocol.world.Location;
 import com.github.retrooper.packetevents.wrapper.PacketWrapper;
-import com.github.retrooper.packetevents.wrapper.play.client.WrapperPlayClientPlayerInput;
-import com.github.retrooper.packetevents.wrapper.play.client.WrapperPlayClientPlayerRotation;
-import com.github.retrooper.packetevents.wrapper.play.client.WrapperPlayClientSteerVehicle;
 import com.github.retrooper.packetevents.wrapper.play.server.WrapperPlayServerCamera;
+import com.github.retrooper.packetevents.wrapper.play.server.WrapperPlayServerChangeGameState;
 import com.github.retrooper.packetevents.wrapper.play.server.WrapperPlayServerDestroyEntities;
 import com.github.retrooper.packetevents.wrapper.play.server.WrapperPlayServerEntityMetadata;
+import com.github.retrooper.packetevents.wrapper.play.server.WrapperPlayServerHeldItemChange;
 import com.github.retrooper.packetevents.wrapper.play.server.WrapperPlayServerSpawnEntity;
 import org.bukkit.Bukkit;
+import org.bukkit.GameMode;
+import org.bukkit.Location;
+import org.bukkit.WeatherType;
+import org.bukkit.entity.Entity;
 import org.bukkit.entity.Player;
 import org.bukkit.scheduler.BukkitTask;
 import org.bukkit.plugin.java.JavaPlugin;
@@ -31,30 +33,57 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.atomic.AtomicInteger;
 
-public final class LockViewController implements PacketListener {
+/**
+ * Coordinates the player lock, client camera and map viewport lifecycle.
+ */
+public final class LockViewController {
     private static final int FIRST_CAMERA_ENTITY_ID = 2_000_000_000;
     private static final float LOCKED_YAW = 0.0F;
-
+    private static final int CLIENT_SPECTATOR_GAME_MODE = 3;
     private final JavaPlugin plugin;
     private final PacketListenerCommon packetListenerRegistration;
     private final BukkitTask timerTask;
     private final MapConfig mapConfig;
     private final MapOverlay mapOverlay;
+    private final PersistentChunkRenderCache mapRenderCache;
+    private final TextureManager textureManager;
+    private final LockViewVisibility visibility;
+    private final LockViewMapUpdater mapUpdater;
     private final AtomicInteger nextCameraEntityId =
             new AtomicInteger(FIRST_CAMERA_ENTITY_ID);
-    private final Map<UUID, LockState> states = new ConcurrentHashMap<>();
+    private final ConcurrentMap<UUID, LockViewState> states = new ConcurrentHashMap<>();
     private volatile boolean debugEnabled;
+    private long tickCounter;
 
+    /**
+     * Creates the lock controller, registers its packet listener and starts its tick loop.
+     *
+     * @param plugin owning plugin
+     */
     public LockViewController(JavaPlugin plugin) {
         this.plugin = plugin;
         mapConfig = new MapConfig(plugin);
-        mapOverlay = new MapOverlay(plugin);
+        mapOverlay = new MapOverlay(plugin, () -> debugEnabled);
+        mapRenderCache = new PersistentChunkRenderCache(plugin);
+        textureManager = new TextureManager(plugin);
+        visibility = new LockViewVisibility(plugin, states);
+        mapUpdater = new LockViewMapUpdater(
+                plugin,
+                mapOverlay,
+                mapConfig,
+                mapRenderCache,
+                textureManager,
+                () -> debugEnabled
+        );
         packetListenerRegistration = PacketEvents.getAPI()
                 .getEventManager()
-                .registerListener(this, PacketListenerPriority.HIGH);
+                .registerListener(
+                        new LockViewPacketListener(this),
+                        PacketListenerPriority.HIGH
+                );
         timerTask = plugin.getServer().getScheduler().runTaskTimer(
                 plugin,
                 this::tickLockedPlayers,
@@ -63,15 +92,25 @@ public final class LockViewController implements PacketListener {
         );
     }
 
+    /**
+     * Stops the tick loop, unlocks active players and releases map resources.
+     */
     public void close() {
         unlockAll();
         mapOverlay.close();
+        mapRenderCache.close();
         timerTask.cancel();
         PacketEvents.getAPI()
                 .getEventManager()
                 .unregisterListener(packetListenerRegistration);
     }
 
+    /**
+     * Toggles the map lock for a player.
+     *
+     * @param player target player
+     * @return true when the map is now open
+     */
     public boolean toggle(Player player) {
         if (states.containsKey(player.getUniqueId())) {
             unlock(player);
@@ -81,11 +120,41 @@ public final class LockViewController implements PacketListener {
         return lock(player);
     }
 
+    /**
+     * Returns the persistent cache used by the map listener.
+     *
+     * @return shared map render cache
+     */
+    public PersistentChunkRenderCache mapRenderCache() {
+        return mapRenderCache;
+    }
+
+    /**
+     * Returns the config keys registered by the active map components.
+     *
+     * @return canonical config keys
+     */
+    public List<String> configKeys() {
+        return mapConfig.keys();
+    }
+
+    /**
+     * Toggles debug messages for lock and render diagnostics.
+     *
+     * @return the new debug state
+     */
     public boolean toggleDebug() {
         debugEnabled = !debugEnabled;
         return debugEnabled;
     }
 
+    /**
+     * Updates a map configuration value and rebuilds active map sessions.
+     *
+     * @param key configuration key
+     * @param value new numeric value
+     * @return true when the key was accepted
+     */
     public boolean updateConfig(String key, double value) {
         if (mapConfig.update(key, value) == null) {
             return false;
@@ -101,6 +170,13 @@ public final class LockViewController implements PacketListener {
         return true;
     }
 
+    /**
+     * Starts a client-side map session for a player.
+     *
+     * @param player target player
+     * @return true when the session was created
+     */
+    /** Creates the camera, visibility state and asynchronous map session. */
     private boolean lock(Player player) {
         if (player.isInsideVehicle()) {
             player.sendMessage(FancyMapMessages.text(
@@ -109,13 +185,12 @@ public final class LockViewController implements PacketListener {
             return false;
         }
 
-        org.bukkit.Location anchor = player.getLocation().clone();
-        org.bukkit.Location initialEye = player.getEyeLocation().clone();
+        Location anchor = player.getLocation().clone();
+        Location initialEye = player.getEyeLocation().clone();
         float lockedYaw = LOCKED_YAW;
-        org.bukkit.Location mapCenter = MapOverlay.mapCenter(initialEye, lockedYaw);
-        mapOverlay.show(player, initialEye, lockedYaw);
+        Location mapCenter = MapOverlay.mapCenter(initialEye, lockedYaw);
 
-        org.bukkit.Location normalized = normalizePlayerLocation(
+        Location normalized = normalizePlayerLocation(
                 anchor,
                 lockedYaw,
                 mapCenter,
@@ -129,21 +204,61 @@ public final class LockViewController implements PacketListener {
             return false;
         }
 
-        org.bukkit.Location cameraOrigin = player.getEyeLocation().clone();
+        Location cameraOrigin = player.getEyeLocation().clone();
         int cameraEntityId = nextCameraEntityId.getAndDecrement();
-        LockState state = new LockState(
+        LockViewState state = new LockViewState(
                 cameraEntityId,
                 anchor,
                 lockedYaw,
-                0.0F
+                0.0F,
+                mapCenter.getWorld(),
+                mapCenter.getX(),
+                mapCenter.getZ(),
+                player.getInventory().getHeldItemSlot(),
+                player.isInvulnerable(),
+                player.getPlayerWeather(),
+                player.getGameMode(),
+                plugin,
+                mapRenderCache
         );
         states.put(player.getUniqueId(), state);
+        player.setInvulnerable(true);
+        player.setPlayerWeather(WeatherType.CLEAR);
+        send(player, new WrapperPlayServerChangeGameState(
+                WrapperPlayServerChangeGameState.Reason.CHANGE_GAME_MODE,
+                CLIENT_SPECTATOR_GAME_MODE
+        ));
+        visibility.hideEntities(player, state);
+        state.renderSnapshotVersion = state.snapshotVersion();
+        state.renderStartedAtNanos = System.nanoTime();
+        mapOverlay.showAsync(
+                player,
+                initialEye,
+                lockedYaw,
+                mapUpdater.createRenderer(state),
+                () -> {
+                    if (states.get(player.getUniqueId()) == state
+                            && player.isOnline()) {
+                        mapUpdater.recordRender(player, state);
+                        state.clientAirBlocks.addAll(visibility.hideNearbyBlocks(
+                                player,
+                                player.getEyeLocation()
+                        ));
+                        state.clientConcreteBlocks.addAll(visibility.showClientBox(
+                                player,
+                                player.getEyeLocation()
+                        ));
+                    }
+                    state.lastRenderedSnapshotVersion = state.renderSnapshotVersion;
+                    state.mapRenderPending = false;
+                }
+        );
 
         send(player, new WrapperPlayServerSpawnEntity(
                 cameraEntityId,
                 UUID.randomUUID(),
                 EntityTypes.ARMOR_STAND,
-                new Location(
+                PacketLocations.at(
                         cameraOrigin.getX(),
                         cameraOrigin.getY(),
                         cameraOrigin.getZ(),
@@ -161,7 +276,7 @@ public final class LockViewController implements PacketListener {
         plugin.getServer().getScheduler().runTaskLater(
                 plugin,
                 () -> {
-                    LockState current = states.get(player.getUniqueId());
+                    LockViewState current = states.get(player.getUniqueId());
                     if (current == state && player.isOnline()) {
                         send(player, new WrapperPlayServerCamera(cameraEntityId));
                     }
@@ -171,16 +286,28 @@ public final class LockViewController implements PacketListener {
         return true;
     }
 
-    private org.bukkit.Location normalizePlayerLocation(
-            org.bukkit.Location source,
+    /**
+     * Aligns the player to the normalized camera/map grid.
+     *
+     * @param source original player location
+     * @param yaw locked yaw
+     * @param mapCenter normalized map center
+     * @param mapDistance map distance offset
+     * @param mapHorizontalOffset horizontal offset
+     * @param verticalOffset vertical offset
+     * @param eyeHeight player eye height
+     * @return normalized player location
+     */
+    private Location normalizePlayerLocation(
+            Location source,
             float yaw,
-            org.bukkit.Location mapCenter,
+            Location mapCenter,
             double mapDistance,
             double mapHorizontalOffset,
             double verticalOffset,
             double eyeHeight
     ) {
-        org.bukkit.Location normalized = source.clone();
+        Location normalized = source.clone();
         double yawRadians = Math.toRadians(yaw);
         double forwardX = -Math.sin(yawRadians);
         double forwardZ = Math.cos(yawRadians);
@@ -203,33 +330,140 @@ public final class LockViewController implements PacketListener {
         return normalized;
     }
 
+    /**
+     * Unlocks a player and restores their location.
+     *
+     * @param player target player
+     */
     public void unlock(Player player) {
-        LockState state = states.remove(player.getUniqueId());
+        unlock(player, true);
+    }
+
+    /**
+     * Disables the map without teleporting the player back, for death/teleport events.
+     *
+     * @param player target player
+     */
+    void disable(Player player) {
+        unlock(player, false);
+    }
+
+    /**
+     * Ends a session and optionally restores the original position.
+     *
+     * @param player target player
+     * @param restorePosition whether to teleport to the anchor
+     */
+    private void unlock(Player player, boolean restorePosition) {
+        LockViewState state = states.remove(player.getUniqueId());
         if (state == null) {
             return;
         }
+        state.mapSnapshotStore.close();
 
         if (player.isOnline()) {
+            player.setInvulnerable(state.originalInvulnerable);
+            if (state.originalPlayerWeather == null) {
+                player.resetPlayerWeather();
+            } else {
+                player.setPlayerWeather(state.originalPlayerWeather);
+            }
+            visibility.restoreEntities(player, state);
             mapOverlay.hide(player);
+            visibility.restoreNearbyBlocks(player, state);
+            visibility.restoreClientBox(player, state);
             send(player, new WrapperPlayServerCamera(player.getEntityId()));
+            send(player, new WrapperPlayServerChangeGameState(
+                    WrapperPlayServerChangeGameState.Reason.CHANGE_GAME_MODE,
+                    toPacketGameMode(player.getGameMode())
+            ));
             send(player, new WrapperPlayServerDestroyEntities(state.cameraEntityId));
-            player.teleport(state.anchor);
+            if (restorePosition) {
+                player.teleport(state.anchor);
+            }
         }
     }
 
+    /** Converts a Bukkit game mode to the protocol game-mode id. */
+    private int toPacketGameMode(GameMode gameMode) {
+        return switch (gameMode) {
+            case CREATIVE -> 1;
+            case ADVENTURE -> 2;
+            case SPECTATOR -> 3;
+            case SURVIVAL -> 0;
+        };
+    }
+
+    /**
+     * Finds the active state for a player.
+     *
+     * @param player target player
+     * @return active state or {@code null}
+     */
+    LockViewState stateFor(Player player) {
+        return states.get(player.getUniqueId());
+    }
+
+    /**
+     * Checks whether a player currently has the map open.
+     *
+     * @param player target player
+     * @return true when locked
+     */
+    boolean isLocked(Player player) {
+        return stateFor(player) != null;
+    }
+
+    /**
+     * Applies visibility hiding to a newly spawned entity.
+     *
+     * @param entity entity to hide
+     */
+    void hideEntityFromLockedPlayers(
+            Entity entity
+    ) {
+        visibility.hideEntityFromLockedPlayers(entity);
+    }
+
+    /**
+     * Sends the previous hotbar slot back to a locked player.
+     *
+     * @param player target player
+     * @param state expected active state
+     * @param slot slot to restore
+     */
+    void restoreHotbar(Player player, LockViewState state, int slot) {
+        plugin.getServer().getScheduler().runTask(plugin, () -> {
+            LockViewState current = stateFor(player);
+            if (current == state && player.isOnline()) {
+                send(player, new WrapperPlayServerHeldItemChange(slot));
+            }
+        });
+    }
+
+    /**
+     * Unlocks every active player during shutdown.
+     */
     void unlockAll() {
         for (UUID playerId : new ArrayList<>(states.keySet())) {
             Player player = Bukkit.getPlayer(playerId);
             if (player != null) {
                 unlock(player);
             } else {
-                states.remove(playerId);
+                LockViewState state = states.remove(playerId);
+                if (state != null) {
+                    state.mapSnapshotStore.close();
+                }
             }
         }
     }
 
+    /**
+     * Runs one main-thread lock tick.
+     */
     void tickLockedPlayers() {
-        for (Map.Entry<UUID, LockState> entry : states.entrySet()) {
+        tickCounter++;
+        for (Map.Entry<UUID, LockViewState> entry : states.entrySet()) {
             Player player = Bukkit.getPlayer(entry.getKey());
             if (player != null && player.isOnline()) {
                 send(player, new WrapperPlayServerCamera(entry.getValue().cameraEntityId));
@@ -237,11 +471,15 @@ public final class LockViewController implements PacketListener {
         }
 
         sendMovementInputs();
+        updateMapViews();
     }
 
+    /**
+     * Applies the newest button state and emits optional debug output.
+     */
     private void sendMovementInputs() {
-        for (Map.Entry<UUID, LockState> entry : states.entrySet()) {
-            LockState state = entry.getValue();
+        for (Map.Entry<UUID, LockViewState> entry : states.entrySet()) {
+            LockViewState state = entry.getValue();
             Player player = Bukkit.getPlayer(entry.getKey());
             MovementInput input;
             while ((input = state.movementInput.poll()) != null) {
@@ -259,145 +497,20 @@ public final class LockViewController implements PacketListener {
         }
     }
 
-    @Override
-    public void onPacketReceive(PacketReceiveEvent event) {
-        Player player = event.getPlayer();
-        if (player == null) {
-            return;
-        }
-
-        LockState state = states.get(player.getUniqueId());
-        if (state == null) {
-            return;
-        }
-
-        if (event.getPacketType() == PacketType.Play.Client.STEER_VEHICLE) {
-            WrapperPlayClientSteerVehicle packet =
-                    new WrapperPlayClientSteerVehicle(event);
-            state.movementInput.add(MovementInput.from(
-                    packet.getSideways(),
-                    packet.getForward(),
-                    packet.isJump(),
-                    packet.isUnmount()
-            ));
-            if (packet.isUnmount()) {
-                packet.setUnmount(false);
-                event.markForReEncode(true);
-            }
-            return;
-        }
-
-        if (event.getPacketType() == PacketType.Play.Client.PLAYER_INPUT) {
-            WrapperPlayClientPlayerInput packet =
-                    new WrapperPlayClientPlayerInput(event);
-            state.movementInput.add(new MovementInput(
-                    packet.isForward(),
-                    packet.isBackward(),
-                    packet.isLeft(),
-                    packet.isRight(),
-                    packet.isJump(),
-                    packet.isShift()
-            ));
-            if (packet.isShift()) {
-                packet.setShift(false);
-                event.markForReEncode(true);
-            }
-            return;
-        }
-
-        if (event.getPacketType() == PacketType.Play.Client.PLAYER_ROTATION) {
-            WrapperPlayClientPlayerRotation packet =
-                    new WrapperPlayClientPlayerRotation(event);
-            packet.setYaw(state.lockedYaw);
-            packet.setPitch(state.lockedPitch);
-            event.markForReEncode(true);
-            return;
-        }
-
-        if (event.getPacketType()
-                == PacketType.Play.Client.PLAYER_POSITION_AND_ROTATION) {
-            event.setCancelled(true);
-            return;
-        }
-
-        if (event.getPacketType() == PacketType.Play.Client.PLAYER_POSITION) {
-            event.setCancelled(true);
-        }
+    /**
+     * Advances pan/zoom state and schedules progressive map refreshes.
+     */
+    private void updateMapViews() {
+        mapUpdater.update(states, tickCounter);
     }
 
+    /**
+     * Sends a PacketEvents packet to a player.
+     *
+     * @param player packet recipient
+     * @param packet packet to send
+     */
     private void send(Player player, PacketWrapper<?> packet) {
         PacketEvents.getAPI().getPlayerManager().sendPacket(player, packet);
-    }
-
-    private static final class LockState {
-        private final int cameraEntityId;
-        private final org.bukkit.Location anchor;
-        private final float lockedYaw;
-        private final float lockedPitch;
-        private final ConcurrentLinkedQueue<MovementInput> movementInput =
-                new ConcurrentLinkedQueue<>();
-        private MovementInput currentMovement;
-
-        private LockState(
-                int cameraEntityId,
-                org.bukkit.Location anchor,
-                float lockedYaw,
-                float lockedPitch
-        ) {
-            this.cameraEntityId = cameraEntityId;
-            this.anchor = anchor;
-            this.lockedYaw = lockedYaw;
-            this.lockedPitch = lockedPitch;
-        }
-    }
-
-    private record MovementInput(
-            boolean forward,
-            boolean backward,
-            boolean left,
-            boolean right,
-            boolean jump,
-            boolean shift
-    ) {
-        private static MovementInput from(
-                float sideways,
-                float forward,
-                boolean jump,
-                boolean shift
-        ) {
-            return new MovementInput(
-                    forward > 0.01F,
-                    forward < -0.01F,
-                    sideways > 0.01F,
-                    sideways < -0.01F,
-                    jump,
-                    shift
-            );
-        }
-
-        private boolean isIdle() {
-            return !forward && !backward && !left && !right && !jump && !shift;
-        }
-
-        private String describe() {
-            StringBuilder result = new StringBuilder();
-            append(result, forward, "W");
-            append(result, backward, "S");
-            append(result, left, "A");
-            append(result, right, "D");
-            append(result, jump, "SPACE");
-            append(result, shift, "SHIFT");
-            return result.toString();
-        }
-
-        private static void append(StringBuilder result, boolean active, String key) {
-            if (!active) {
-                return;
-            }
-            if (result.length() > 0) {
-                result.append('+');
-            }
-            result.append(key);
-        }
     }
 }

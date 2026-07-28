@@ -2,11 +2,21 @@ package dev.funayd.fancyMap.map;
 
 import java.util.Arrays;
 
+/**
+ * Mutable indexed-color canvas used to compose the map viewport.
+ */
 public final class MapCanvas {
     private final int width;
     private final int height;
     private final byte[] pixels;
 
+    /**
+     * Creates a canvas filled with one background color.
+     *
+     * @param width canvas width in pixels
+     * @param height canvas height in pixels
+     * @param background initial color
+     */
     public MapCanvas(int width, int height, byte background) {
         if (width <= 0 || height <= 0) {
             throw new IllegalArgumentException("Canvas dimensions must be positive.");
@@ -17,24 +27,45 @@ public final class MapCanvas {
         clear(background);
     }
 
+    /** @return canvas width in pixels */
     public int getWidth() {
         return width;
     }
 
+    /** @return canvas height in pixels */
     public int getHeight() {
         return height;
     }
 
+    /**
+     * Fills the complete canvas.
+     *
+     * @param color fill color
+     */
     public void clear(byte color) {
         Arrays.fill(pixels, color);
     }
 
+    /**
+     * Sets one pixel when it is inside the canvas.
+     *
+     * @param x pixel X coordinate
+     * @param y pixel Y coordinate
+     * @param color pixel color
+     */
     public void setPixel(int x, int y, byte color) {
         if (x >= 0 && x < width && y >= 0 && y < height) {
             pixels[y * width + x] = color;
         }
     }
 
+    /**
+     * Reads one pixel.
+     *
+     * @param x pixel X coordinate
+     * @param y pixel Y coordinate
+     * @return pixel color
+     */
     public byte getPixel(int x, int y) {
         if (x < 0 || x >= width || y < 0 || y >= height) {
             return 0;
@@ -42,6 +73,15 @@ public final class MapCanvas {
         return pixels[y * width + x];
     }
 
+    /**
+     * Fills a rectangle clipped to the canvas.
+     *
+     * @param x rectangle X coordinate
+     * @param y rectangle Y coordinate
+     * @param rectWidth rectangle width
+     * @param rectHeight rectangle height
+     * @param color fill color
+     */
     public void fillRect(int x, int y, int rectWidth, int rectHeight, byte color) {
         if (rectWidth <= 0 || rectHeight <= 0) {
             return;
@@ -58,6 +98,15 @@ public final class MapCanvas {
         }
     }
 
+    /**
+     * Draws the outline of a rectangle.
+     *
+     * @param x rectangle X coordinate
+     * @param y rectangle Y coordinate
+     * @param rectWidth rectangle width
+     * @param rectHeight rectangle height
+     * @param color line color
+     */
     public void drawRect(int x, int y, int rectWidth, int rectHeight, byte color) {
         if (rectWidth <= 0 || rectHeight <= 0) {
             return;
@@ -72,6 +121,15 @@ public final class MapCanvas {
         }
     }
 
+    /**
+     * Draws a clipped integer line using Bresenham stepping.
+     *
+     * @param x1 start X coordinate
+     * @param y1 start Y coordinate
+     * @param x2 end X coordinate
+     * @param y2 end Y coordinate
+     * @param color line color
+     */
     public void drawLine(int x1, int y1, int x2, int y2, byte color) {
         int dx = Math.abs(x2 - x1);
         int sx = x1 < x2 ? 1 : -1;
@@ -96,6 +154,15 @@ public final class MapCanvas {
         }
     }
 
+    /**
+     * Copies a rectangular region in row-major order.
+     *
+     * @param x region X coordinate
+     * @param y region Y coordinate
+     * @param regionWidth region width
+     * @param regionHeight region height
+     * @return copied pixel data
+     */
     public byte[] copyRegion(int x, int y, int regionWidth, int regionHeight) {
         if (regionWidth <= 0 || regionHeight <= 0
                 || x < 0 || y < 0
