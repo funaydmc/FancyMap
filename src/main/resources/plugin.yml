@@ -1,0 +1,15 @@
+name: FancyMap
+version: '${version}'
+
+main: dev.funayd.fancyMap.FancyMap
+api-version: '1.21.11'
+load: POSTWORLD
+depend:
+  - packetevents
+commands:
+  fancymap:
+    description: Khóa/mở góc nhìn và hiển thị bản đồ client-side
+    usage: /fancymap [debug|config <config_key> <config_value>]
+    aliases:
+      - fm
+      - map
