@@ -4,6 +4,8 @@ import dev.funayd.fancyMap.lockview.LockViewController;
 import dev.funayd.fancyMap.lockview.LockViewListener;
 import dev.funayd.fancyMap.lockview.FancyMapCommand;
 import dev.funayd.fancyMap.map.MapCacheListener;
+import dev.funayd.fancyMap.placeholder.FancyMapPlaceholderExpansion;
+import org.bukkit.Bukkit;
 import org.bukkit.plugin.java.JavaPlugin;
 
 import java.util.Objects;
@@ -13,6 +15,7 @@ import java.util.Objects;
  */
 public final class FancyMap extends JavaPlugin {
     private LockViewController lockViewController;
+    private FancyMapPlaceholderExpansion placeholderExpansion;
 
     @Override
     /**
@@ -33,6 +36,11 @@ public final class FancyMap extends JavaPlugin {
         FancyMapCommand fancyMapCommand = new FancyMapCommand(lockViewController);
         Objects.requireNonNull(getCommand("fancymap")).setExecutor(fancyMapCommand);
         Objects.requireNonNull(getCommand("fancymap")).setTabCompleter(fancyMapCommand);
+
+        if (Bukkit.getPluginManager().isPluginEnabled("PlaceholderAPI")) {
+            placeholderExpansion = new FancyMapPlaceholderExpansion(lockViewController);
+            placeholderExpansion.register();
+        }
     }
 
     @Override
@@ -42,6 +50,9 @@ public final class FancyMap extends JavaPlugin {
     public void onDisable() {
         if (lockViewController != null) {
             lockViewController.close();
+        }
+        if (placeholderExpansion != null) {
+            placeholderExpansion.unregister();
         }
     }
 

@@ -228,6 +228,7 @@ public final class LockViewController {
                 mapCenter.getX(),
                 mapCenter.getZ(),
                 player.getInventory().getHeldItemSlot(),
+                mapConfig.getDefaultZoom(),
                 player.isInvulnerable(),
                 player.getPlayerWeather(),
                 player.getGameMode(),
@@ -425,6 +426,16 @@ public final class LockViewController {
      */
     boolean isLocked(Player player) {
         return stateFor(player) != null;
+    }
+
+    /**
+     * Checks whether a player currently has the map open by UUID.
+     *
+     * @param playerId target player UUID
+     * @return true when the map is open
+     */
+    public boolean isMapOpen(UUID playerId) {
+        return playerId != null && states.containsKey(playerId);
     }
 
     /**

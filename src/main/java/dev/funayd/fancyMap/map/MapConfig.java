@@ -18,6 +18,7 @@ public final class MapConfig {
     private static final double DEFAULT_MAP_PAN_SPEED = 4.0D;
     private static final double DEFAULT_MIN_ZOOM = 0.25D;
     private static final double DEFAULT_MAX_ZOOM = 4.0D;
+    private static final double DEFAULT_DEFAULT_ZOOM = 1.0D;
 
     private final JavaPlugin plugin;
     private final Map<String, DoubleSetting> settings = new LinkedHashMap<>();
@@ -50,6 +51,7 @@ public final class MapConfig {
         registerDouble("map-pan-speed", DEFAULT_MAP_PAN_SPEED, true, "pan-speed", "cursor-speed");
         registerDouble("min-zoom", DEFAULT_MIN_ZOOM, true, "map-min-zoom");
         registerDouble("max-zoom", DEFAULT_MAX_ZOOM, true, "map-max-zoom");
+        registerDouble("default-zoom", DEFAULT_DEFAULT_ZOOM, true, "map-default-zoom");
         normalizeZoomBounds();
         initialized = true;
         saveIfDirty();
@@ -128,6 +130,11 @@ public final class MapConfig {
         return getDouble("max-zoom");
     }
 
+    /** @return initial blocks-per-pixel zoom for new map sessions */
+    public double getDefaultZoom() {
+        return getDouble("default-zoom");
+    }
+
     /**
      * Returns a registered setting value by canonical key or alias.
      *
@@ -174,7 +181,15 @@ public final class MapConfig {
         if (canonical.equals("min-zoom") && value > getMaxZoom()) {
             return null;
         }
-        if (canonical.equals("max-zoom") && value < getMinZoom()) {
+        if (canonical.equals("min-zoom") && value > getDefaultZoom()) {
+            return null;
+        }
+        if (canonical.equals("max-zoom")
+                && (value < getMinZoom() || value < getDefaultZoom())) {
+            return null;
+        }
+        if (canonical.equals("default-zoom")
+                && (value < getMinZoom() || value > getMaxZoom())) {
             return null;
         }
 
@@ -229,14 +244,23 @@ public final class MapConfig {
     private void normalizeZoomBounds() {
         double minZoom = values.get("min-zoom");
         double maxZoom = values.get("max-zoom");
-        if (minZoom <= maxZoom) {
-            return;
+        if (minZoom > maxZoom) {
+            minZoom = DEFAULT_MIN_ZOOM;
+            maxZoom = DEFAULT_MAX_ZOOM;
+            values.put("min-zoom", minZoom);
+            values.put("max-zoom", maxZoom);
+            plugin.getConfig().set("map.min-zoom", minZoom);
+            plugin.getConfig().set("map.max-zoom", maxZoom);
+            dirty = true;
         }
-        values.put("min-zoom", DEFAULT_MIN_ZOOM);
-        values.put("max-zoom", DEFAULT_MAX_ZOOM);
-        plugin.getConfig().set("map.min-zoom", DEFAULT_MIN_ZOOM);
-        plugin.getConfig().set("map.max-zoom", DEFAULT_MAX_ZOOM);
-        dirty = true;
+
+        double defaultZoom = values.get("default-zoom");
+        double normalizedDefault = Math.max(minZoom, Math.min(maxZoom, defaultZoom));
+        if (defaultZoom != normalizedDefault) {
+            values.put("default-zoom", normalizedDefault);
+            plugin.getConfig().set("map.default-zoom", normalizedDefault);
+            dirty = true;
+        }
     }
 
     private record DoubleSetting(double defaultValue, boolean positive) {

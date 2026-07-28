@@ -75,7 +75,7 @@ final class LockViewState {
     /** Current map center Z coordinate. */
     double mapCenterZ;
     /** Current blocks-per-pixel zoom. */
-    double blocksPerPixel = 1.0D;
+    double blocksPerPixel;
     /** Last server hotbar slot acknowledged to the client. */
     volatile int lastHotbarSlot;
 
@@ -90,6 +90,7 @@ final class LockViewState {
      * @param mapCenterX initial map center X
      * @param mapCenterZ initial map center Z
      * @param lastHotbarSlot current server hotbar slot
+     * @param initialZoom initial blocks-per-pixel zoom
      * @param originalInvulnerable original invulnerability state
      * @param originalPlayerWeather original per-player weather override
      * @param originalGameMode original server game mode
@@ -105,6 +106,7 @@ final class LockViewState {
             double mapCenterX,
             double mapCenterZ,
             int lastHotbarSlot,
+            double initialZoom,
             boolean originalInvulnerable,
             WeatherType originalPlayerWeather,
             GameMode originalGameMode,
@@ -119,6 +121,7 @@ final class LockViewState {
         this.mapCenterX = mapCenterX;
         this.mapCenterZ = mapCenterZ;
         this.lastHotbarSlot = lastHotbarSlot;
+        this.blocksPerPixel = initialZoom;
         this.originalInvulnerable = originalInvulnerable;
         this.originalPlayerWeather = originalPlayerWeather;
         this.originalGameMode = originalGameMode;
