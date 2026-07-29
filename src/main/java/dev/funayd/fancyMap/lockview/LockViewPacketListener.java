@@ -3,7 +3,9 @@ package dev.funayd.fancyMap.lockview;
 import com.github.retrooper.packetevents.event.PacketListener;
 import com.github.retrooper.packetevents.event.PacketReceiveEvent;
 import com.github.retrooper.packetevents.protocol.packettype.PacketType;
+import com.github.retrooper.packetevents.protocol.player.DiggingAction;
 import com.github.retrooper.packetevents.wrapper.play.client.WrapperPlayClientHeldItemChange;
+import com.github.retrooper.packetevents.wrapper.play.client.WrapperPlayClientPlayerDigging;
 import com.github.retrooper.packetevents.wrapper.play.client.WrapperPlayClientPlayerInput;
 import com.github.retrooper.packetevents.wrapper.play.client.WrapperPlayClientPlayerRotation;
 import com.github.retrooper.packetevents.wrapper.play.client.WrapperPlayClientSteerVehicle;
@@ -68,6 +70,12 @@ final class LockViewPacketListener implements PacketListener {
                     packet.isJump(),
                     packet.isShift()
             ));
+            if (packet.isJump() && !state.jumpHeld) {
+                state.jumpHeld = true;
+                controller.openWaypointListFromInput(player);
+            } else if (!packet.isJump()) {
+                state.jumpHeld = false;
+            }
             if (packet.isShift()) {
                 packet.setShift(false);
                 event.markForReEncode(true);
@@ -88,6 +96,16 @@ final class LockViewPacketListener implements PacketListener {
             }
             event.setCancelled(true);
             controller.restoreHotbar(player, state, previousSlot);
+            return;
+        }
+
+        if (event.getPacketType() == PacketType.Play.Client.PLAYER_DIGGING) {
+            WrapperPlayClientPlayerDigging packet =
+                    new WrapperPlayClientPlayerDigging(event);
+            if (packet.getAction() == DiggingAction.SWAP_ITEM_WITH_OFFHAND) {
+                event.setCancelled(true);
+                controller.teleportToHovered(player, state);
+            }
             return;
         }
 

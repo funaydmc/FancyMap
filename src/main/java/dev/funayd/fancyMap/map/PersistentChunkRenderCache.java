@@ -157,6 +157,16 @@ public final class PersistentChunkRenderCache implements AutoCloseable {
         snapshotStores.remove(store);
     }
 
+    /** Checks whether any open map currently displays this cached chunk. */
+    private boolean retainedByActiveViewport(UUID worldId, long key) {
+        for (AsyncChunkSnapshotStore store : snapshotStores) {
+            if (store.retains(worldId, key)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     /**
      * Flushes dirty cache files and stops the cache I/O executor.
      */
@@ -172,7 +182,7 @@ public final class PersistentChunkRenderCache implements AutoCloseable {
     private WorldCache worldCache(World world) {
         return worlds.computeIfAbsent(
                 world.getUID(),
-                uuid -> new WorldCache(directory.resolve(uuid + ".bin"))
+            uuid -> new WorldCache(uuid, directory.resolve(uuid + ".bin"))
         );
     }
 
@@ -259,6 +269,7 @@ public final class PersistentChunkRenderCache implements AutoCloseable {
     }
 
     private final class WorldCache {
+        private final UUID worldId;
         private final Path file;
         private final ConcurrentMap<Long, Entry> entries = new ConcurrentHashMap<>();
         private final Set<Long> validated = ConcurrentHashMap.newKeySet();
@@ -268,7 +279,8 @@ public final class PersistentChunkRenderCache implements AutoCloseable {
         private final AtomicLong evictions = new AtomicLong();
 
         /** Creates and loads one world cache file. */
-        private WorldCache(Path file) {
+        private WorldCache(UUID worldId, Path file) {
+            this.worldId = worldId;
             this.file = file;
             load();
         }
@@ -315,13 +327,18 @@ public final class PersistentChunkRenderCache implements AutoCloseable {
                 Long candidate = null;
                 while (iterator.hasNext()) {
                     Long key = iterator.next();
-                    if (!key.equals(protectedKey)) {
+                    if (!key.equals(protectedKey)
+                            && !retainedByActiveViewport(worldId, key)) {
                         candidate = key;
                         break;
                     }
                 }
                 if (candidate == null) {
-                    return;
+                    var fallback = entries.keySet().iterator();
+                    if (!fallback.hasNext()) {
+                        return;
+                    }
+                    candidate = fallback.next();
                 }
                 if (entries.remove(candidate) != null) {
                     validated.remove(candidate);

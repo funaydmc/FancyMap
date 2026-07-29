@@ -15,3 +15,7 @@ commands:
     aliases:
       - fm
       - map
+permissions:
+  fancymap.admin:
+    description: Manage FancyMap waypoints
+    default: op

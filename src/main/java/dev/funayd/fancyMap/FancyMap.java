@@ -4,6 +4,7 @@ import dev.funayd.fancyMap.lockview.LockViewController;
 import dev.funayd.fancyMap.lockview.LockViewListener;
 import dev.funayd.fancyMap.lockview.FancyMapCommand;
 import dev.funayd.fancyMap.map.MapCacheListener;
+import dev.funayd.fancyMap.map.WaypointListGui;
 import dev.funayd.fancyMap.placeholder.FancyMapPlaceholderExpansion;
 import org.bukkit.Bukkit;
 import org.bukkit.plugin.java.JavaPlugin;
@@ -33,7 +34,22 @@ public final class FancyMap extends JavaPlugin {
                 this
         );
 
-        FancyMapCommand fancyMapCommand = new FancyMapCommand(lockViewController);
+        WaypointListGui waypointListGui = new WaypointListGui(
+                lockViewController.waypointManager(),
+                (player, id) -> {
+                    if (!lockViewController.focusWaypoint(player, id)) {
+                        player.sendMessage(FancyMapMessages.text(
+                                "§cWaypoint không thuộc thế giới hiện tại hoặc không khả dụng."
+                        ));
+                    }
+                }
+        );
+        lockViewController.setWaypointListOpener(waypointListGui::open);
+        getServer().getPluginManager().registerEvents(waypointListGui, this);
+        FancyMapCommand fancyMapCommand = new FancyMapCommand(
+                lockViewController,
+                waypointListGui
+        );
         Objects.requireNonNull(getCommand("fancymap")).setExecutor(fancyMapCommand);
         Objects.requireNonNull(getCommand("fancymap")).setTabCompleter(fancyMapCommand);
 

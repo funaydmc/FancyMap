@@ -7,11 +7,13 @@ import org.bukkit.plugin.java.JavaPlugin;
 
 import java.util.Comparator;
 import java.util.Set;
+import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.PriorityBlockingQueue;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
@@ -24,6 +26,7 @@ import java.util.concurrent.atomic.AtomicLong;
 public final class AsyncChunkSnapshotStore implements AutoCloseable {
     // ponytail: keep main-thread chunk requests bounded; increase only after profiling.
     private static final int REQUESTS_PER_TICK = 2;
+    private static final int MAX_IN_FLIGHT_REQUESTS = 8;
     private static final int MAX_VALIDATED_CHUNKS = 32_768;
     private static final long RETRY_DELAY_TICKS = 20L;
 
@@ -32,6 +35,7 @@ public final class AsyncChunkSnapshotStore implements AutoCloseable {
     private final ConcurrentMap<Long, CompletableFuture<ChunkSnapshot>> snapshots =
             new ConcurrentHashMap<>();
     private final Set<Long> validated = ConcurrentHashMap.newKeySet();
+    private final Set<Long> unavailable = ConcurrentHashMap.newKeySet();
     private final ConcurrentMap<Long, Request> queuedRequests =
             new ConcurrentHashMap<>();
     private final PriorityBlockingQueue<Request> requestQueue =
@@ -39,6 +43,7 @@ public final class AsyncChunkSnapshotStore implements AutoCloseable {
                     .comparingLong(Request::priority)
                     .thenComparingLong(Request::sequence));
     private final AtomicBoolean drainScheduled = new AtomicBoolean();
+    private final AtomicInteger inFlightRequests = new AtomicInteger();
     private final AtomicLong snapshotVersion = new AtomicLong();
     private final AtomicLong requestSequence = new AtomicLong();
     private final AtomicLong snapshotLoadCount = new AtomicLong();
@@ -46,6 +51,7 @@ public final class AsyncChunkSnapshotStore implements AutoCloseable {
     private final AtomicLong longestSnapshotLoadNanos = new AtomicLong();
     private final PersistentChunkRenderCache renderCache;
     private volatile boolean closed;
+    private volatile Viewport retainedViewport;
 
     /**
      * Creates a store for one world and one map session.
@@ -90,6 +96,9 @@ public final class AsyncChunkSnapshotStore implements AutoCloseable {
             long priority
     ) {
         long key = chunkKey(chunkX, chunkZ);
+        if (unavailable.contains(key)) {
+            return CompletableFuture.completedFuture(null);
+        }
         if (validated.contains(key)
                 && renderCache.get(world, chunkX, chunkZ) != null) {
             return CompletableFuture.completedFuture(null);
@@ -112,6 +121,61 @@ public final class AsyncChunkSnapshotStore implements AutoCloseable {
             scheduleDrain();
         }
         return future;
+    }
+
+    /**
+     * Discards pending work outside the newest viewport.
+     *
+     * @param minChunkX minimum visible chunk X
+     * @param maxChunkX maximum visible chunk X
+     * @param minChunkZ minimum visible chunk Z
+     * @param maxChunkZ maximum visible chunk Z
+     */
+    public void retainViewport(
+            int minChunkX,
+            int maxChunkX,
+            int minChunkZ,
+            int maxChunkZ
+    ) {
+        retainedViewport = new Viewport(minChunkX, maxChunkX, minChunkZ, maxChunkZ);
+        requestQueue.removeIf(request -> !inside(
+                request.chunkX(),
+                request.chunkZ(),
+                minChunkX,
+                maxChunkX,
+                minChunkZ,
+                maxChunkZ
+        ));
+        queuedRequests.entrySet().removeIf(entry -> !inside(
+                chunkX(entry.getKey()),
+                chunkZ(entry.getKey()),
+                minChunkX,
+                maxChunkX,
+                minChunkZ,
+                maxChunkZ
+        ));
+        snapshots.entrySet().removeIf(entry -> {
+            if (inside(
+                    chunkX(entry.getKey()),
+                    chunkZ(entry.getKey()),
+                    minChunkX,
+                    maxChunkX,
+                    minChunkZ,
+                    maxChunkZ
+            )) {
+                return false;
+            }
+            entry.getValue().cancel(false);
+            return true;
+        });
+        unavailable.removeIf(key -> !inside(
+                chunkX(key),
+                chunkZ(key),
+                minChunkX,
+                maxChunkX,
+                minChunkZ,
+                maxChunkZ
+        ));
     }
 
     /**
@@ -156,6 +220,7 @@ public final class AsyncChunkSnapshotStore implements AutoCloseable {
     public void invalidate(int chunkX, int chunkZ) {
         long key = chunkKey(chunkX, chunkZ);
         validated.remove(key);
+        unavailable.remove(key);
         snapshots.remove(key);
         queuedRequests.remove(key);
         snapshotVersion.incrementAndGet();
@@ -174,9 +239,11 @@ public final class AsyncChunkSnapshotStore implements AutoCloseable {
     @Override
     public void close() {
         closed = true;
+        retainedViewport = null;
         requestQueue.clear();
         queuedRequests.clear();
         validated.clear();
+        unavailable.clear();
         snapshots.clear();
         renderCache.unregister(this);
     }
@@ -217,6 +284,8 @@ public final class AsyncChunkSnapshotStore implements AutoCloseable {
         return "pending=" + snapshots.size()
                 + ", queued=" + requestQueue.size()
                 + ", validated=" + validated.size()
+                + ", unavailable=" + unavailable.size()
+                + ", inFlight=" + inFlightRequests.get()
                 + ", loads=" + loads
                 + ", snapshotAvgMs=" + averageMillis
                 + ", snapshotMaxMs=" + longestMillis;
@@ -241,6 +310,7 @@ public final class AsyncChunkSnapshotStore implements AutoCloseable {
         int scheduled = 0;
         Request request;
         while (scheduled < REQUESTS_PER_TICK
+                && inFlightRequests.get() < MAX_IN_FLIGHT_REQUESTS
                 && (request = requestQueue.poll()) != null) {
             queuedRequests.remove(request.key(), request);
             CompletableFuture<ChunkSnapshot> future = snapshots.get(request.key());
@@ -265,21 +335,32 @@ public final class AsyncChunkSnapshotStore implements AutoCloseable {
 
     /** Captures one chunk snapshot and reports completion to its future. */
     private void loadSnapshot(Request request, CompletableFuture<ChunkSnapshot> future) {
+        if (!world.isChunkGenerated(request.chunkX(), request.chunkZ())) {
+            if (snapshots.remove(request.key(), future)) {
+                unavailable.add(request.key());
+                future.complete(null);
+                snapshotVersion.incrementAndGet();
+            }
+            return;
+        }
         // Paper completes this future on the main thread; snapshot capture stays
         // on that safe boundary, while all pixel work remains on render workers.
-        world.getChunkAtAsync(request.chunkX(), request.chunkZ(), true)
+        inFlightRequests.incrementAndGet();
+        world.getChunkAtAsync(request.chunkX(), request.chunkZ(), false)
                 .whenComplete((chunk, exception) -> {
-                    if (snapshots.get(request.key()) != future) {
-                        return;
-                    }
-                    if (exception != null) {
-                        snapshots.remove(request.key(), future);
-                        future.completeExceptionally(exception);
-                        snapshotVersion.incrementAndGet();
-                        retry(request);
-                        return;
-                    }
                     try {
+                        if (snapshots.get(request.key()) != future) {
+                            return;
+                        }
+                        if (exception != null || chunk == null) {
+                            snapshots.remove(request.key(), future);
+                            future.completeExceptionally(exception == null
+                                    ? new IllegalStateException("Chunk unavailable")
+                                    : exception);
+                            snapshotVersion.incrementAndGet();
+                            retry(request);
+                            return;
+                        }
                         long snapshotStarted = System.nanoTime();
                         future.complete(chunk.getChunkSnapshot(true, false, false));
                         long snapshotElapsed = System.nanoTime() - snapshotStarted;
@@ -295,6 +376,8 @@ public final class AsyncChunkSnapshotStore implements AutoCloseable {
                         future.completeExceptionally(snapshotException);
                         snapshotVersion.incrementAndGet();
                         retry(request);
+                    } finally {
+                        inFlightRequests.decrementAndGet();
                     }
                 });
     }
@@ -316,6 +399,46 @@ public final class AsyncChunkSnapshotStore implements AutoCloseable {
         return ((long) x << 32) ^ (z & 0xffffffffL);
     }
 
+    /** Extracts a signed X coordinate from a packed chunk key. */
+    private int chunkX(long key) {
+        return (int) (key >> 32);
+    }
+
+    /** Extracts a signed Z coordinate from a packed chunk key. */
+    private int chunkZ(long key) {
+        return (int) key;
+    }
+
+    /** Checks whether a chunk belongs to the active viewport bounds. */
+    private boolean inside(
+            int chunkX,
+            int chunkZ,
+            int minChunkX,
+            int maxChunkX,
+            int minChunkZ,
+            int maxChunkZ
+    ) {
+        return chunkX >= minChunkX
+                && chunkX <= maxChunkX
+                && chunkZ >= minChunkZ
+                && chunkZ <= maxChunkZ;
+    }
+
+    /** Returns whether a chunk belongs to this store's currently visible viewport. */
+    boolean retains(UUID worldId, long key) {
+        Viewport viewport = retainedViewport;
+        return viewport != null
+                && world.getUID().equals(worldId)
+                && inside(
+                        chunkX(key),
+                        chunkZ(key),
+                        viewport.minChunkX(),
+                        viewport.maxChunkX(),
+                        viewport.minChunkZ(),
+                        viewport.maxChunkZ()
+                );
+    }
+
     /** Keeps per-session validation memory bounded during long map sessions. */
     private void trimValidated() {
         while (validated.size() > MAX_VALIDATED_CHUNKS) {
@@ -333,6 +456,14 @@ public final class AsyncChunkSnapshotStore implements AutoCloseable {
             long key,
             long priority,
             long sequence
+    ) {
+    }
+
+    private record Viewport(
+            int minChunkX,
+            int maxChunkX,
+            int minChunkZ,
+            int maxChunkZ
     ) {
     }
 }

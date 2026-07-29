@@ -64,6 +64,7 @@ public final class MapOverlay implements AutoCloseable {
     public MapOverlay(JavaPlugin plugin, BooleanSupplier debugEnabled) {
         this.plugin = plugin;
         this.debugEnabled = debugEnabled;
+        CanvasPlane.verifyCoordinateSystem();
         int threadCount = Math.min(4, Math.max(2,
                 Runtime.getRuntime().availableProcessors() / 2));
         renderExecutor = Executors.newFixedThreadPool(threadCount, runnable -> {
@@ -103,6 +104,7 @@ public final class MapOverlay implements AutoCloseable {
 
         RenderSession session = createSession(cameraOrigin, yaw);
         activeSessions.put(player.getUniqueId(), session);
+        logCoordinateSystem(player, session);
         CompletableFuture
                 .supplyAsync(() -> render(renderer), renderExecutor)
                 .thenAccept(rendered -> Bukkit.getScheduler().runTask(
@@ -151,6 +153,7 @@ public final class MapOverlay implements AutoCloseable {
         hide(player);
         RenderSession session = createSession(cameraOrigin, yaw);
         activeSessions.put(player.getUniqueId(), session);
+        logCoordinateSystem(player, session);
         renderAsync(player, session, startAsyncRender(renderer), true, completion);
     }
 
@@ -195,6 +198,88 @@ public final class MapOverlay implements AutoCloseable {
     }
 
     /**
+     * Returns the canvas X coordinate at the visual center of the map.
+     *
+     * @return center canvas X coordinate
+     */
+    public static double canvasCenterX() {
+        return CANVAS_WIDTH / 2.0D;
+    }
+
+    /**
+     * Returns the canvas Y coordinate at the visual center of the map.
+     *
+     * @return center canvas Y coordinate
+     */
+    public static double canvasCenterY() {
+        return CANVAS_HEIGHT / 2.0D;
+    }
+
+    /**
+     * Converts a visual rightward screen offset to the mirrored map canvas X.
+     *
+     * <p>Item-frame maps mirror the logical canvas horizontally. Positive
+     * screen-right values therefore decrease logical canvas X.</p>
+     *
+     * @param screenRightPixels pixels to the player's right from the center
+     * @return logical canvas X coordinate
+     */
+    public static double canvasXForScreenRight(double screenRightPixels) {
+        return canvasCenterX() - screenRightPixels;
+    }
+
+    /**
+     * Converts a world X coordinate to the logical canvas X coordinate.
+     *
+     * @param worldX world X coordinate
+     * @param centerX rendered map center X
+     * @param blocksPerPixel rendered map scale
+     * @return horizontal pixel coordinate on the combined canvas
+     */
+    public static double worldToCanvasX(
+            double worldX,
+            double centerX,
+            double blocksPerPixel
+    ) {
+        return canvasCenterX() + (worldX - centerX) / blocksPerPixel;
+    }
+
+    /**
+     * Converts a world Z coordinate to the logical canvas Y coordinate.
+     *
+     * @param worldZ world Z coordinate
+     * @param centerZ rendered map center Z
+     * @param blocksPerPixel rendered map scale
+     * @return vertical pixel coordinate on the combined canvas
+     */
+    public static double worldToCanvasY(
+            double worldZ,
+            double centerZ,
+            double blocksPerPixel
+    ) {
+        return canvasCenterY() - (worldZ - centerZ) / blocksPerPixel;
+    }
+
+    /**
+     * Converts a canvas coordinate to a point on the active map plane.
+     *
+     * @param player target player
+     * @param canvasX horizontal canvas coordinate, including values outside the canvas
+     * @param canvasY vertical canvas coordinate, including values outside the canvas
+     * @param depth distance toward the camera from the map surface
+     * @return world position, or {@code null} when no overlay is active
+     */
+    public Location canvasLocation(
+            Player player,
+            double canvasX,
+            double canvasY,
+            double depth
+    ) {
+        RenderSession session = activeSessions.get(player.getUniqueId());
+        return session == null ? null : session.canvasLocation(canvasX, canvasY, depth);
+    }
+
+    /**
      * Hides and destroys the active client-side overlay.
      *
      * @param player target player
@@ -226,27 +311,35 @@ public final class MapOverlay implements AutoCloseable {
     /** Creates the fixed 5×3 client-side frame layout. */
     private RenderSession createSession(Location cameraOrigin, float yaw) {
         Location center = mapCenter(cameraOrigin, yaw);
-        double yawRadians = Math.toRadians(yaw);
-        double rightX = Math.cos(yawRadians);
-        double rightZ = Math.sin(yawRadians);
         int frameDirection = frameDirection(yaw);
+        CanvasPlane canvasPlane = CanvasPlane.create(
+                center,
+                frameDirection,
+                yaw,
+                CANVAS_WIDTH,
+                CANVAS_HEIGHT
+        );
         Frame[] frames = new Frame[COLUMNS * ROWS];
 
         for (int row = 0; row < ROWS; row++) {
             for (int column = 0; column < COLUMNS; column++) {
-                double horizontalOffset = column - (COLUMNS - 1) / 2.0D;
-                double verticalOffset = (ROWS - 1) / 2.0D - row;
+                Location frameLocation = canvasPlane.frameEntityLocation(
+                        column,
+                        row,
+                        COLUMNS,
+                        ROWS
+                );
                 frames[row * COLUMNS + column] = new Frame(
                         nextFrameEntityId.getAndDecrement(),
                         nextMapId.getAndIncrement(),
-                        center.getX() + rightX * horizontalOffset,
-                        center.getY() + verticalOffset,
-                        center.getZ() + rightZ * horizontalOffset,
+                        frameLocation.getX(),
+                        frameLocation.getY(),
+                        frameLocation.getZ(),
                         frameDirection
                 );
             }
         }
-        return new RenderSession(frames);
+        return new RenderSession(frames, canvasPlane);
     }
 
     /** Renders and splits a synchronous canvas into map tiles. */
@@ -463,12 +556,24 @@ public final class MapOverlay implements AutoCloseable {
         PacketEvents.getAPI().getPlayerManager().sendPacket(player, packet);
     }
 
+    /** Logs the canonical canvas basis when map debugging is enabled. */
+    private void logCoordinateSystem(Player player, RenderSession session) {
+        if (debugEnabled.getAsBoolean()) {
+            plugin.getLogger().info(FancyMapMessages.consoleDebug(
+                    "player=" + player.getName() + " "
+                            + session.canvasPlane.debugSummary()
+            ));
+        }
+    }
+
     private static final class RenderSession {
         private final Frame[] frames;
+        private final CanvasPlane canvasPlane;
         private volatile boolean active = true;
 
-        private RenderSession(Frame[] frames) {
+        private RenderSession(Frame[] frames, CanvasPlane canvasPlane) {
             this.frames = frames;
+            this.canvasPlane = canvasPlane;
         }
 
         private int[] entityIds() {
@@ -477,6 +582,10 @@ public final class MapOverlay implements AutoCloseable {
                 entityIds[index] = frames[index].entityId;
             }
             return entityIds;
+        }
+
+        private Location canvasLocation(double canvasX, double canvasY, double depth) {
+            return canvasPlane.canvasLocation(canvasX, canvasY, depth);
         }
     }
 

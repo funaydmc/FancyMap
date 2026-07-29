@@ -8,6 +8,7 @@ import org.bukkit.plugin.java.JavaPlugin;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.Executor;
@@ -43,6 +44,12 @@ public final class WorldMapRenderer implements AsyncMapCanvasRenderer {
     private final double playerZ;
     private final MapTexture cursorTexture;
     private final MapTexture playerTexture;
+    private final MapTexture waypointTexture;
+    private final MapTexture waypointHoverTexture;
+    private final Map<String, MapTexture> customWaypointTextures;
+    private final List<Waypoint> waypoints;
+    private final String hoveredWaypointId;
+    private final boolean debugMaterialWaypoints;
 
     /**
      * Creates a world renderer for one viewport.
@@ -70,7 +77,13 @@ public final class WorldMapRenderer implements AsyncMapCanvasRenderer {
             double playerX,
             double playerZ,
             MapTexture cursorTexture,
-            MapTexture playerTexture
+            MapTexture playerTexture,
+            List<Waypoint> waypoints,
+            String hoveredWaypointId,
+            MapTexture waypointTexture,
+            MapTexture waypointHoverTexture,
+            Map<String, MapTexture> customWaypointTextures,
+            boolean debugMaterialWaypoints
     ) {
         if (!Double.isFinite(blocksPerPixel) || blocksPerPixel <= 0.0D) {
             throw new IllegalArgumentException("blocksPerPixel must be positive.");
@@ -89,6 +102,18 @@ public final class WorldMapRenderer implements AsyncMapCanvasRenderer {
         this.playerZ = playerZ;
         this.cursorTexture = Objects.requireNonNull(cursorTexture, "cursorTexture");
         this.playerTexture = Objects.requireNonNull(playerTexture, "playerTexture");
+        this.waypoints = List.copyOf(Objects.requireNonNull(waypoints, "waypoints"));
+        this.hoveredWaypointId = hoveredWaypointId;
+        this.waypointTexture = Objects.requireNonNull(waypointTexture, "waypointTexture");
+        this.waypointHoverTexture = Objects.requireNonNull(
+                waypointHoverTexture,
+                "waypointHoverTexture"
+        );
+        this.customWaypointTextures = Map.copyOf(Objects.requireNonNull(
+                customWaypointTextures,
+                "customWaypointTextures"
+        ));
+        this.debugMaterialWaypoints = debugMaterialWaypoints;
     }
 
     /**
@@ -107,6 +132,12 @@ public final class WorldMapRenderer implements AsyncMapCanvasRenderer {
         int maxChunkX = Math.floorDiv(maxBlockX, 16);
         int minChunkZ = Math.floorDiv(minBlockZ, 16);
         int maxChunkZ = Math.floorDiv(maxBlockZ, 16);
+        snapshotStore.retainViewport(
+                minChunkX,
+                maxChunkX,
+                minChunkZ,
+                maxChunkZ
+        );
 
         int chunkCountX = maxChunkX - minChunkX + 1;
         int chunkCountZ = maxChunkZ - minChunkZ + 1;
@@ -217,13 +248,51 @@ public final class WorldMapRenderer implements AsyncMapCanvasRenderer {
     private void drawMarkers(MapCanvas canvas) {
         int centerX = canvas.getWidth() / 2;
         int centerY = canvas.getHeight() / 2;
-        int playerPixelX = (int) Math.round(
-                centerX + (playerX - this.centerX) / blocksPerPixel
-        );
-        int playerPixelY = (int) Math.round(
-                centerY - (playerZ - this.centerZ) / blocksPerPixel
-        );
+        int playerPixelX = (int) Math.round(MapOverlay.worldToCanvasX(
+                playerX,
+                this.centerX,
+                blocksPerPixel
+        ));
+        int playerPixelY = (int) Math.round(MapOverlay.worldToCanvasY(
+                playerZ,
+                this.centerZ,
+                blocksPerPixel
+        ));
         playerTexture.drawCentered(canvas, playerPixelX, playerPixelY);
+        for (Waypoint waypoint : waypoints) {
+            if (!waypoint.worldName().equals(world.getName())) {
+                continue;
+            }
+            int waypointPixelX = (int) Math.round(MapOverlay.worldToCanvasX(
+                    waypoint.x(),
+                    this.centerX,
+                    blocksPerPixel
+            ));
+            int waypointPixelY = (int) Math.round(MapOverlay.worldToCanvasY(
+                    waypoint.z(),
+                    this.centerZ,
+                    blocksPerPixel
+            ));
+            if (waypoint.iconMaterial() != null) {
+                if (debugMaterialWaypoints) {
+                    waypointHoverTexture.drawCentered(
+                            canvas,
+                            waypointPixelX,
+                            waypointPixelY
+                    );
+                }
+                continue;
+            }
+            MapTexture texture = waypoint.iconTexture() == null
+                    ? (waypoint.id().equals(hoveredWaypointId)
+                    ? waypointHoverTexture
+                    : waypointTexture)
+                    : customWaypointTextures.getOrDefault(
+                    waypoint.iconTexture(),
+                    waypointTexture
+            );
+            texture.drawCentered(canvas, waypointPixelX, waypointPixelY);
+        }
         cursorTexture.drawCentered(canvas, centerX, centerY);
     }
 

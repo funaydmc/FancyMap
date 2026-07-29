@@ -2,8 +2,11 @@ package dev.funayd.fancyMap.lockview;
 
 import dev.funayd.fancyMap.FancyMapMessages;
 import dev.funayd.fancyMap.map.MapConfig;
+import dev.funayd.fancyMap.map.ClientCanvasDisplayHelper;
 import dev.funayd.fancyMap.map.MapOverlay;
 import dev.funayd.fancyMap.map.PersistentChunkRenderCache;
+import dev.funayd.fancyMap.map.Waypoint;
+import dev.funayd.fancyMap.map.WaypointManager;
 import dev.funayd.fancyMap.packet.PacketLocations;
 import dev.funayd.fancyMap.texture.TextureManager;
 import com.github.retrooper.packetevents.PacketEvents;
@@ -19,9 +22,11 @@ import com.github.retrooper.packetevents.wrapper.play.server.WrapperPlayServerDe
 import com.github.retrooper.packetevents.wrapper.play.server.WrapperPlayServerEntityMetadata;
 import com.github.retrooper.packetevents.wrapper.play.server.WrapperPlayServerHeldItemChange;
 import com.github.retrooper.packetevents.wrapper.play.server.WrapperPlayServerSpawnEntity;
+import net.kyori.adventure.text.Component;
 import org.bukkit.Bukkit;
 import org.bukkit.GameMode;
 import org.bukkit.Location;
+import org.bukkit.Material;
 import org.bukkit.WeatherType;
 import org.bukkit.entity.Entity;
 import org.bukkit.entity.Player;
@@ -35,6 +40,7 @@ import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Consumer;
 
 /**
  * Coordinates the player lock, client camera and map viewport lifecycle.
@@ -48,13 +54,16 @@ public final class LockViewController {
     private final BukkitTask timerTask;
     private final MapConfig mapConfig;
     private final MapOverlay mapOverlay;
+    private final ClientCanvasDisplayHelper canvasDisplays;
     private final PersistentChunkRenderCache mapRenderCache;
     private final TextureManager textureManager;
+    private final WaypointManager waypointManager;
     private final LockViewVisibility visibility;
     private final LockViewMapUpdater mapUpdater;
     private final AtomicInteger nextCameraEntityId =
             new AtomicInteger(FIRST_CAMERA_ENTITY_ID);
     private final ConcurrentMap<UUID, LockViewState> states = new ConcurrentHashMap<>();
+    private volatile Consumer<Player> waypointListOpener = ignored -> { };
     private volatile boolean debugEnabled;
     private long tickCounter;
 
@@ -67,8 +76,10 @@ public final class LockViewController {
         this.plugin = plugin;
         mapConfig = new MapConfig(plugin);
         mapOverlay = new MapOverlay(plugin, () -> debugEnabled);
+        canvasDisplays = new ClientCanvasDisplayHelper(mapOverlay);
         mapRenderCache = new PersistentChunkRenderCache(plugin);
         textureManager = new TextureManager(plugin);
+        waypointManager = new WaypointManager(plugin);
         visibility = new LockViewVisibility(plugin, states);
         mapUpdater = new LockViewMapUpdater(
                 plugin,
@@ -76,6 +87,8 @@ public final class LockViewController {
                 mapConfig,
                 mapRenderCache,
                 textureManager,
+                waypointManager,
+                canvasDisplays,
                 () -> debugEnabled
         );
         packetListenerRegistration = PacketEvents.getAPI()
@@ -97,6 +110,7 @@ public final class LockViewController {
      */
     public void close() {
         unlockAll();
+        canvasDisplays.close();
         mapOverlay.close();
         mapRenderCache.close();
         timerTask.cancel();
@@ -118,6 +132,20 @@ public final class LockViewController {
         }
 
         return lock(player);
+    }
+
+    /** Sets the main-thread action run when Space opens the waypoint menu. */
+    public void setWaypointListOpener(Consumer<Player> waypointListOpener) {
+        this.waypointListOpener = waypointListOpener;
+    }
+
+    /** Schedules the waypoint menu from the asynchronous packet listener. */
+    void openWaypointListFromInput(Player player) {
+        plugin.getServer().getScheduler().runTask(plugin, () -> {
+            if (isLocked(player)) {
+                waypointListOpener.accept(player);
+            }
+        });
     }
 
     /**
@@ -164,10 +192,94 @@ public final class LockViewController {
         return true;
     }
 
+    /** Reloads waypoints and rebuilds active sessions immediately. */
+    public void reloadWaypoints() {
+        waypointManager.reload();
+        restartActiveSessions();
+    }
+
+    /** @return waypoint manager used by the admin command */
+    public WaypointManager waypointManager() {
+        return waypointManager;
+    }
+
+    /**
+     * Sets a waypoint icon from either an item material or custom texture name.
+     *
+     * @param id waypoint id
+     * @param icon material or texture name
+     * @return false when the waypoint or icon is invalid
+     */
+    public boolean updateWaypointIcon(String id, String icon) {
+        if (waypointManager.get(id) == null) {
+            return false;
+        }
+        Material material = Material.matchMaterial(icon);
+        boolean updated;
+        if (material != null && material.isItem()) {
+            updated = waypointManager.setIcon(id, material.name(), null);
+        } else {
+            textureManager.reload();
+            String texture = textureManager.resolveCustomTextureName(icon);
+            if (texture == null) {
+                return false;
+            }
+            updated = waypointManager.setIcon(id, null, texture);
+        }
+        if (updated) {
+            restartActiveSessions();
+        }
+        return updated;
+    }
+
+    /** @return available custom texture names for command completion */
+    public List<String> waypointTextureNames() {
+        return textureManager.customTextureNames();
+    }
+
+    /**
+     * Teleports a player to a configured waypoint.
+     *
+     * @param player player to teleport
+     * @param id waypoint id
+     * @return false when the waypoint or its world is unavailable
+     */
+    public boolean teleportToWaypoint(Player player, String id) {
+        Waypoint waypoint = waypointManager.get(id);
+        Location target = waypoint == null ? null : waypoint.location();
+        return target != null && player.teleport(target);
+    }
+
+    /**
+     * Opens the map when needed and centers it on a waypoint in the player's world.
+     *
+     * @param player map viewer
+     * @param id waypoint id
+     * @return false when the waypoint is unavailable or belongs to another world
+     */
+    public boolean focusWaypoint(Player player, String id) {
+        Waypoint waypoint = waypointManager.get(id);
+        if (waypoint == null || !waypoint.worldName().equals(player.getWorld().getName())) {
+            return false;
+        }
+        if (!isLocked(player) && !lock(player)) {
+            return false;
+        }
+        LockViewState state = stateFor(player);
+        if (state == null || !state.world.getName().equals(waypoint.worldName())) {
+            return false;
+        }
+        state.mapCenterX = Math.rint(waypoint.x());
+        state.mapCenterZ = Math.rint(waypoint.z());
+        state.focusRequested = true;
+        return true;
+    }
+
     /** Reloads YAML, textures and all currently open map sessions. */
     public void reload() {
         plugin.reloadConfig();
         mapConfig.reload();
+        waypointManager.reload();
         textureManager.reload();
         restartActiveSessions();
     }
@@ -245,6 +357,9 @@ public final class LockViewController {
         visibility.hideEntities(player, state);
         state.renderSnapshotVersion = state.snapshotVersion();
         state.renderStartedAtNanos = System.nanoTime();
+        double initialMapCenterX = state.mapCenterX;
+        double initialMapCenterZ = state.mapCenterZ;
+        double initialBlocksPerPixel = state.blocksPerPixel;
         mapOverlay.showAsync(
                 player,
                 initialEye,
@@ -254,6 +369,31 @@ public final class LockViewController {
                     if (states.get(player.getUniqueId()) == state
                             && player.isOnline()) {
                         mapUpdater.recordRender(player, state);
+                        mapUpdater.updateItemDisplays(
+                                player,
+                                state,
+                                initialMapCenterX,
+                                initialMapCenterZ,
+                                initialBlocksPerPixel
+                        );
+                        canvasDisplays.showText(
+                                player,
+                                "canvas-corner-a",
+                                0.0D,
+                                0.0D,
+                                Component.text("A"),
+                                1.20D,
+                                ClientCanvasDisplayHelper.TextAnchor.TOP_LEFT
+                        );
+                        canvasDisplays.showText(
+                                player,
+                                "canvas-corner-b",
+                                MapOverlay.CANVAS_WIDTH - 1.0D,
+                                MapOverlay.CANVAS_HEIGHT - 1.0D,
+                                Component.text("B"),
+                                1.20D,
+                                ClientCanvasDisplayHelper.TextAnchor.BOTTOM_RIGHT
+                        );
                         state.clientAirBlocks.addAll(visibility.hideNearbyBlocks(
                                 player,
                                 player.getEyeLocation()
@@ -383,6 +523,7 @@ public final class LockViewController {
                 player.setPlayerWeather(state.originalPlayerWeather);
             }
             visibility.restoreEntities(player, state);
+            canvasDisplays.hideAll(player);
             mapOverlay.hide(player);
             visibility.restoreNearbyBlocks(player, state);
             visibility.restoreClientBox(player, state);
@@ -470,6 +611,23 @@ public final class LockViewController {
         plugin.getServer().getScheduler().runTask(plugin, () -> {
             if (states.get(player.getUniqueId()) == state && player.isOnline()) {
                 unlock(player);
+            }
+        });
+    }
+
+    /** Teleports to the waypoint currently under the map cursor. */
+    void teleportToHovered(Player player, LockViewState state) {
+        Waypoint waypoint = waypointManager.get(state.hoveredWaypointId);
+        if (waypoint == null) {
+            return;
+        }
+        plugin.getServer().getScheduler().runTask(plugin, () -> {
+            if (states.get(player.getUniqueId()) != state || !player.isOnline()) {
+                return;
+            }
+            Location target = waypoint.location();
+            if (target != null) {
+                player.teleport(target);
             }
         });
     }

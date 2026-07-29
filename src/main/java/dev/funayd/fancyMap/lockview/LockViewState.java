@@ -46,6 +46,8 @@ final class LockViewState {
     final Set<Entity> hiddenEntities = Collections.newSetFromMap(new WeakHashMap<>());
     /** Players hidden from this viewer. */
     final Set<UUID> hiddenPlayers = new HashSet<>();
+    /** Client-only waypoint ItemDisplay keys currently visible on the canvas. */
+    final Set<String> visibleWaypointItemDisplays = new HashSet<>();
     /** Snapshot store for this session. */
     final AsyncChunkSnapshotStore mapSnapshotStore;
     /** Latest movement packets received from the client. */
@@ -56,6 +58,8 @@ final class LockViewState {
             new ConcurrentLinkedQueue<>();
     /** Whether a map render is currently being sent. */
     boolean mapRenderPending = true;
+    /** Whether the map must render after a command-selected center change. */
+    boolean focusRequested;
     /** Snapshot version represented by the last completed render. */
     long lastRenderedSnapshotVersion;
     /** Snapshot version captured when the current render started. */
@@ -70,12 +74,16 @@ final class LockViewState {
     int renderSamples;
     /** Last movement state applied by the tick loop. */
     MovementInput currentMovement;
+    /** Whether Space was held in the last received input packet. */
+    volatile boolean jumpHeld;
     /** Current map center X coordinate. */
     double mapCenterX;
     /** Current map center Z coordinate. */
     double mapCenterZ;
     /** Current blocks-per-pixel zoom. */
     double blocksPerPixel;
+    /** Waypoint currently under the fixed canvas cursor. */
+    volatile String hoveredWaypointId;
     /** Last server hotbar slot acknowledged to the client. */
     volatile int lastHotbarSlot;
 

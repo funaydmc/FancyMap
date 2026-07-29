@@ -1,0 +1,25 @@
+[08:45:41] [main/INFO]: [STDOUT]: ### net.minecraft.world.entity.Display
+[08:45:41] [main/INFO]: [STDOUT]: DATA_TRANSFORMATION_INTERPOLATION_START_DELTA_TICKS_ID id=8 serializer=net.minecraft.network.syncher.EntityDataSerializer$$Lambda/0x000000001868e268 serializerId=1
+[08:45:41] [main/INFO]: [STDOUT]: DATA_TRANSFORMATION_INTERPOLATION_DURATION_ID id=9 serializer=net.minecraft.network.syncher.EntityDataSerializer$$Lambda/0x000000001868e268 serializerId=1
+[08:45:41] [main/INFO]: [STDOUT]: DATA_POS_ROT_INTERPOLATION_DURATION_ID id=10 serializer=net.minecraft.network.syncher.EntityDataSerializer$$Lambda/0x000000001868e268 serializerId=1
+[08:45:41] [main/INFO]: [STDOUT]: DATA_TRANSLATION_ID id=11 serializer=net.minecraft.network.syncher.EntityDataSerializer$$Lambda/0x000000001868e268 serializerId=35
+[08:45:41] [main/INFO]: [STDOUT]: DATA_SCALE_ID id=12 serializer=net.minecraft.network.syncher.EntityDataSerializer$$Lambda/0x000000001868e268 serializerId=35
+[08:45:41] [main/INFO]: [STDOUT]: DATA_LEFT_ROTATION_ID id=13 serializer=net.minecraft.network.syncher.EntityDataSerializer$$Lambda/0x000000001868e268 serializerId=36
+[08:45:41] [main/INFO]: [STDOUT]: DATA_RIGHT_ROTATION_ID id=14 serializer=net.minecraft.network.syncher.EntityDataSerializer$$Lambda/0x000000001868e268 serializerId=36
+[08:45:41] [main/INFO]: [STDOUT]: DATA_BILLBOARD_RENDER_CONSTRAINTS_ID id=15 serializer=net.minecraft.network.syncher.EntityDataSerializer$$Lambda/0x000000001868e268 serializerId=0
+[08:45:41] [main/INFO]: [STDOUT]: DATA_BRIGHTNESS_OVERRIDE_ID id=16 serializer=net.minecraft.network.syncher.EntityDataSerializer$$Lambda/0x000000001868e268 serializerId=1
+[08:45:41] [main/INFO]: [STDOUT]: DATA_VIEW_RANGE_ID id=17 serializer=net.minecraft.network.syncher.EntityDataSerializer$$Lambda/0x000000001868e268 serializerId=3
+[08:45:41] [main/INFO]: [STDOUT]: DATA_SHADOW_RADIUS_ID id=18 serializer=net.minecraft.network.syncher.EntityDataSerializer$$Lambda/0x000000001868e268 serializerId=3
+[08:45:41] [main/INFO]: [STDOUT]: DATA_SHADOW_STRENGTH_ID id=19 serializer=net.minecraft.network.syncher.EntityDataSerializer$$Lambda/0x000000001868e268 serializerId=3
+[08:45:41] [main/INFO]: [STDOUT]: DATA_WIDTH_ID id=20 serializer=net.minecraft.network.syncher.EntityDataSerializer$$Lambda/0x000000001868e268 serializerId=3
+[08:45:41] [main/INFO]: [STDOUT]: DATA_HEIGHT_ID id=21 serializer=net.minecraft.network.syncher.EntityDataSerializer$$Lambda/0x000000001868e268 serializerId=3
+[08:45:41] [main/INFO]: [STDOUT]: DATA_GLOW_COLOR_OVERRIDE_ID id=22 serializer=net.minecraft.network.syncher.EntityDataSerializer$$Lambda/0x000000001868e268 serializerId=1
+[08:45:41] [main/INFO]: [STDOUT]: ### net.minecraft.world.entity.Display$TextDisplay
+[08:45:41] [main/INFO]: [STDOUT]: DATA_TEXT_ID id=23 serializer=net.minecraft.network.syncher.EntityDataSerializer$$Lambda/0x000000001868e268 serializerId=5
+[08:45:41] [main/INFO]: [STDOUT]: DATA_LINE_WIDTH_ID id=24 serializer=net.minecraft.network.syncher.EntityDataSerializer$$Lambda/0x000000001868e268 serializerId=1
+[08:45:41] [main/INFO]: [STDOUT]: DATA_BACKGROUND_COLOR_ID id=25 serializer=net.minecraft.network.syncher.EntityDataSerializer$$Lambda/0x000000001868e268 serializerId=1
+[08:45:41] [main/INFO]: [STDOUT]: DATA_TEXT_OPACITY_ID id=26 serializer=net.minecraft.network.syncher.EntityDataSerializer$$Lambda/0x000000001868e268 serializerId=0
+[08:45:41] [main/INFO]: [STDOUT]: DATA_STYLE_FLAGS_ID id=27 serializer=net.minecraft.network.syncher.EntityDataSerializer$$Lambda/0x000000001868e268 serializerId=0
+[08:45:41] [main/INFO]: [STDOUT]: ### net.minecraft.world.entity.Display$ItemDisplay
+[08:45:41] [main/INFO]: [STDOUT]: DATA_ITEM_STACK_ID id=23 serializer=net.minecraft.network.syncher.EntityDataSerializers$2 serializerId=7
+[08:45:41] [main/INFO]: [STDOUT]: DATA_ITEM_DISPLAY_ID id=24 serializer=net.minecraft.network.syncher.EntityDataSerializer$$Lambda/0x000000001868e268 serializerId=0

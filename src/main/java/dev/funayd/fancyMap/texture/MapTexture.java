@@ -19,6 +19,16 @@ public final class MapTexture {
         this.opaque = opaque;
     }
 
+    /** @return texture width in map pixels */
+    public int width() {
+        return width;
+    }
+
+    /** @return texture height in map pixels */
+    public int height() {
+        return height;
+    }
+
     /**
      * Converts a PNG image into Minecraft map palette colors.
      *

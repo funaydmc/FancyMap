@@ -1,24 +1,36 @@
 package dev.funayd.fancyMap.lockview;
 
+import io.github.retrooper.packetevents.util.SpigotConversionUtil;
 import dev.funayd.fancyMap.FancyMapMessages;
 import dev.funayd.fancyMap.map.MapConfig;
+import dev.funayd.fancyMap.map.ClientCanvasDisplayHelper;
 import dev.funayd.fancyMap.map.MapOverlay;
 import dev.funayd.fancyMap.map.PersistentChunkRenderCache;
+import dev.funayd.fancyMap.map.Waypoint;
+import dev.funayd.fancyMap.map.WaypointManager;
 import dev.funayd.fancyMap.map.WorldMapRenderer;
 import dev.funayd.fancyMap.texture.TextureManager;
+import net.kyori.adventure.text.Component;
+import net.kyori.adventure.text.format.NamedTextColor;
+import org.bukkit.Material;
 import org.bukkit.entity.Player;
+import org.bukkit.inventory.ItemStack;
 import org.bukkit.plugin.java.JavaPlugin;
 
+import java.util.HashSet;
 import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
 import java.util.function.BooleanSupplier;
+import java.util.Objects;
+import java.util.Set;
 
 /**
  * Owns map pan/zoom state transitions and progressive render scheduling.
  */
 final class LockViewMapUpdater {
     private static final double MAP_ZOOM_FACTOR = 1.25D;
+    private static final double WAYPOINT_TOOLTIP_OFFSET_X = 16.0D;
     private static final long SNAPSHOT_REFRESH_INTERVAL_TICKS = 5L;
 
     private final JavaPlugin plugin;
@@ -26,6 +38,8 @@ final class LockViewMapUpdater {
     private final MapConfig mapConfig;
     private final PersistentChunkRenderCache renderCache;
     private final TextureManager textureManager;
+    private final WaypointManager waypointManager;
+    private final ClientCanvasDisplayHelper canvasDisplays;
     private final BooleanSupplier debugEnabled;
 
     /**
@@ -42,6 +56,8 @@ final class LockViewMapUpdater {
             MapConfig mapConfig,
             PersistentChunkRenderCache renderCache,
             TextureManager textureManager,
+            WaypointManager waypointManager,
+            ClientCanvasDisplayHelper canvasDisplays,
             BooleanSupplier debugEnabled
     ) {
         this.plugin = plugin;
@@ -49,6 +65,8 @@ final class LockViewMapUpdater {
         this.mapConfig = mapConfig;
         this.renderCache = renderCache;
         this.textureManager = textureManager;
+        this.waypointManager = waypointManager;
+        this.canvasDisplays = canvasDisplays;
         this.debugEnabled = debugEnabled;
     }
 
@@ -66,7 +84,7 @@ final class LockViewMapUpdater {
                 continue;
             }
 
-            boolean changed = false;
+            boolean changed = state.focusRequested;
             if (tickCounter >= state.nextSnapshotRefreshTick
                     && state.snapshotVersion() > state.lastRenderedSnapshotVersion) {
                 changed = true;
@@ -98,15 +116,45 @@ final class LockViewMapUpdater {
                 changed |= previous != state.blocksPerPixel;
             }
 
+            Waypoint hoveredWaypoint = waypointManager.findHovered(
+                    state.world,
+                    state.mapCenterX,
+                    state.mapCenterZ,
+                    state.blocksPerPixel
+            );
+            String hoveredId = hoveredWaypoint == null ? null : hoveredWaypoint.id();
+            boolean waypointChanged = !Objects.equals(state.hoveredWaypointId, hoveredId);
+            if (waypointChanged) {
+                state.hoveredWaypointId = hoveredId;
+                changed = true;
+            }
+            if (waypointChanged || (hoveredWaypoint != null && changed)) {
+                updateTooltip(player, hoveredWaypoint, state);
+            }
+
             if (changed && !state.mapRenderPending) {
                 state.mapRenderPending = true;
+                state.focusRequested = false;
                 state.renderSnapshotVersion = state.snapshotVersion();
                 state.renderStartedAtNanos = System.nanoTime();
+                double renderedCenterX = state.mapCenterX;
+                double renderedCenterZ = state.mapCenterZ;
+                double renderedBlocksPerPixel = state.blocksPerPixel;
                 mapOverlay.refreshAsync(
                         player,
                         createRenderer(state),
                         () -> {
                             recordRender(player, state);
+                            if (states.get(player.getUniqueId()) == state
+                                    && player.isOnline()) {
+                                updateItemDisplays(
+                                        player,
+                                        state,
+                                        renderedCenterX,
+                                        renderedCenterZ,
+                                        renderedBlocksPerPixel
+                                );
+                            }
                             state.lastRenderedSnapshotVersion =
                                     state.renderSnapshotVersion;
                             state.mapRenderPending = false;
@@ -193,7 +241,101 @@ final class LockViewMapUpdater {
                 state.anchor.getX(),
                 state.anchor.getZ(),
                 textureManager.cursor(),
-                textureManager.player()
+                textureManager.player(),
+                waypointManager.all(),
+                state.hoveredWaypointId,
+                textureManager.waypoint(),
+                textureManager.waypointHover(),
+                textureManager.customTextures(),
+                debugEnabled.getAsBoolean()
+        );
+    }
+
+    /**
+     * Reconciles client-only ItemDisplays with one rendered viewport.
+     *
+     * @param player target player
+     * @param state active map state
+     * @param centerX rendered map center X
+     * @param centerZ rendered map center Z
+     * @param blocksPerPixel rendered map scale
+     */
+    void updateItemDisplays(
+            Player player,
+            LockViewState state,
+            double centerX,
+            double centerZ,
+            double blocksPerPixel
+    ) {
+        Set<String> visible = new HashSet<>();
+        for (Waypoint waypoint : waypointManager.all()) {
+            if (!waypoint.worldName().equals(state.world.getName())
+                    || waypoint.iconMaterial() == null) {
+                continue;
+            }
+            double canvasX = MapOverlay.worldToCanvasX(
+                    waypoint.x(),
+                    centerX,
+                    blocksPerPixel
+            );
+            double canvasY = MapOverlay.worldToCanvasY(
+                    waypoint.z(),
+                    centerZ,
+                    blocksPerPixel
+            );
+            if (canvasX < 0.0D || canvasX >= MapOverlay.CANVAS_WIDTH
+                    || canvasY < 0.0D || canvasY >= MapOverlay.CANVAS_HEIGHT) {
+                continue;
+            }
+            Material material = Material.matchMaterial(waypoint.iconMaterial());
+            if (material == null || !material.isItem()) {
+                continue;
+            }
+            String key = "waypoint-item-" + waypoint.id();
+            visible.add(key);
+            canvasDisplays.showItem(
+                    player,
+                    key,
+                    canvasX,
+                    canvasY,
+                    SpigotConversionUtil.fromBukkitItemStack(new ItemStack(material)),
+                    0.5D
+            );
+        }
+        for (String key : state.visibleWaypointItemDisplays) {
+            if (!visible.contains(key)) {
+                canvasDisplays.hide(player, key);
+            }
+        }
+        state.visibleWaypointItemDisplays.clear();
+        state.visibleWaypointItemDisplays.addAll(visible);
+    }
+
+    /** Shows or hides the tooltip for the waypoint under the cursor. */
+    private void updateTooltip(Player player, Waypoint waypoint, LockViewState state) {
+        if (waypoint == null) {
+            canvasDisplays.hide(player, "waypoint-tooltip");
+            return;
+        }
+        canvasDisplays.showText(
+                player,
+                "waypoint-tooltip",
+                MapOverlay.canvasXForScreenRight(WAYPOINT_TOOLTIP_OFFSET_X),
+                MapOverlay.canvasCenterY(),
+                Component.text(" " + waypoint.name() + " ", NamedTextColor.YELLOW)
+                        .append(Component.newline())
+                        .append(Component.text(
+                                " Press ",
+                                NamedTextColor.WHITE
+                        ))
+                        .append(Component.text("F", NamedTextColor.GREEN))
+                        .append(Component.text(
+                                " to teleport ",
+                                NamedTextColor.WHITE
+                        )),
+                1.0D,
+                ClientCanvasDisplayHelper.TextAnchor.MIDDLE_LEFT,
+                true
         );
     }
 }
