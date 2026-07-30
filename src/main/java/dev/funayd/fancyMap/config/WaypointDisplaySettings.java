@@ -27,7 +27,7 @@ public final class WaypointDisplaySettings {
         this.placeholders = placeholders;
         config.registerString(
                 path("tooltip"),
-                "<yellow>%fancymap_waypoint_name%<newline><white>Press <lime>F <white>to teleport"
+                "<yellow>%fancymap_waypoint_name%<newline><white>Press <green>F <white>to teleport"
         );
         config.registerString(path("list.name"), "<yellow>%fancymap_waypoint_name%");
         config.registerStringList(path("list.lore"), List.of(
@@ -58,7 +58,9 @@ public final class WaypointDisplaySettings {
 
     /** Resolves PlaceholderAPI tokens, then MiniMessage tags. */
     private Component component(Player player, Waypoint waypoint, String template) {
-        return MINI_MESSAGE.deserialize(placeholders.resolve(player, waypoint, template));
+        return MINI_MESSAGE.deserialize(placeholders.resolve(player, waypoint, template)
+                .replace("<lime>", "<green>")
+                .replace("</lime>", "</green>"));
     }
 
     /** Builds one config path inside the waypoint display section. */

@@ -18,7 +18,7 @@ chunk-scheduler:
 waypoint-display:
   # Tokens: %fancymap_waypoint_id%, %fancymap_waypoint_name%, %fancymap_waypoint_world%,
   # %fancymap_waypoint_x%, %fancymap_waypoint_y%, %fancymap_waypoint_z%, %fancymap_waypoint_icon%.
-  tooltip: "<yellow>%fancymap_waypoint_name%<newline><white>Press <lime>F <white>to teleport"
+  tooltip: "<yellow>%fancymap_waypoint_name%<newline><white>Press <green>F <white>to teleport"
   list:
     name: "<yellow>%fancymap_waypoint_name%"
     lore:
