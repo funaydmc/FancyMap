@@ -1,9 +1,10 @@
-package dev.funayd.fancyMap.map;
+package dev.funayd.fancyMap.waypoint;
 
+import dev.funayd.fancyMap.config.ConfigManager;
+import dev.funayd.fancyMap.map.MapOverlay;
 import org.bukkit.World;
 import org.bukkit.configuration.ConfigurationSection;
 import org.bukkit.entity.Player;
-import org.bukkit.plugin.java.JavaPlugin;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -18,24 +19,24 @@ public final class WaypointManager {
     private static final int CANVAS_CENTER_Y = MapOverlay.CANVAS_HEIGHT / 2;
     private static final int HOVER_RADIUS_PIXELS = 10;
 
-    private final JavaPlugin plugin;
+    private final ConfigManager config;
     private final Map<String, Waypoint> waypoints = new LinkedHashMap<>();
     private volatile List<Waypoint> snapshot = List.of();
 
     /**
      * Loads waypoint definitions from the plugin configuration.
      *
-     * @param plugin owning plugin
+     * @param config shared plugin configuration manager
      */
-    public WaypointManager(JavaPlugin plugin) {
-        this.plugin = plugin;
+    public WaypointManager(ConfigManager config) {
+        this.config = config;
         reload();
     }
 
     /** Reloads all waypoint definitions from YAML. */
     public void reload() {
         waypoints.clear();
-        ConfigurationSection section = plugin.getConfig().getConfigurationSection("waypoints");
+        ConfigurationSection section = config.section("waypoints");
         if (section != null) {
             for (String id : section.getKeys(false)) {
                 String name = section.getString(id + ".name");
@@ -110,8 +111,8 @@ public final class WaypointManager {
         if (normalizedId == null || waypoints.remove(normalizedId) == null) {
             return false;
         }
-        plugin.getConfig().set("waypoints." + normalizedId, null);
-        plugin.saveConfig();
+        config.set("waypoints." + normalizedId, null);
+        config.save();
         updateSnapshot();
         return true;
     }
@@ -206,14 +207,14 @@ public final class WaypointManager {
     /** Writes one waypoint to the plugin configuration. */
     private void save(Waypoint waypoint) {
         String path = "waypoints." + waypoint.id();
-        plugin.getConfig().set(path + ".name", waypoint.name());
-        plugin.getConfig().set(path + ".world", waypoint.worldName());
-        plugin.getConfig().set(path + ".x", waypoint.x());
-        plugin.getConfig().set(path + ".y", waypoint.y());
-        plugin.getConfig().set(path + ".z", waypoint.z());
-        plugin.getConfig().set(path + ".icon.material", waypoint.iconMaterial());
-        plugin.getConfig().set(path + ".icon.texture", waypoint.iconTexture());
-        plugin.saveConfig();
+        config.set(path + ".name", waypoint.name());
+        config.set(path + ".world", waypoint.worldName());
+        config.set(path + ".x", waypoint.x());
+        config.set(path + ".y", waypoint.y());
+        config.set(path + ".z", waypoint.z());
+        config.set(path + ".icon.material", waypoint.iconMaterial());
+        config.set(path + ".icon.texture", waypoint.iconTexture());
+        config.save();
     }
 
     /** Publishes a stable snapshot for worker threads. */

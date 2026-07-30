@@ -18,6 +18,7 @@ import org.bukkit.event.block.FluidLevelChangeEvent;
 import org.bukkit.event.entity.EntityChangeBlockEvent;
 import org.bukkit.event.entity.EntityExplodeEvent;
 import org.bukkit.event.world.StructureGrowEvent;
+import org.bukkit.event.world.WorldUnloadEvent;
 
 /**
  * Invalidates rendered chunks when Bukkit reports world mutations.
@@ -124,6 +125,12 @@ public final class MapCacheListener implements Listener {
         event.getBlocks().stream()
                 .map(BlockState::getBlock)
                 .forEach(this::invalidate);
+    }
+
+    /** Releases the in-memory cache after Bukkit unloads a world. */
+    @EventHandler
+    private void onWorldUnload(WorldUnloadEvent event) {
+        cache.unload(event.getWorld());
     }
 
     /** Invalidates the chunk containing a changed block. */

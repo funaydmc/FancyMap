@@ -1,13 +1,14 @@
 package dev.funayd.fancyMap.lockview;
 
 import dev.funayd.fancyMap.map.AsyncChunkSnapshotStore;
+import dev.funayd.fancyMap.map.GlobalChunkSnapshotScheduler;
 import dev.funayd.fancyMap.map.PersistentChunkRenderCache;
+import dev.funayd.fancyMap.input.MovementInput;
 import org.bukkit.GameMode;
 import org.bukkit.Location;
 import org.bukkit.WeatherType;
 import org.bukkit.World;
 import org.bukkit.entity.Entity;
-import org.bukkit.plugin.java.JavaPlugin;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -48,6 +49,12 @@ final class LockViewState {
     final Set<UUID> hiddenPlayers = new HashSet<>();
     /** Client-only waypoint ItemDisplay keys currently visible on the canvas. */
     final Set<String> visibleWaypointItemDisplays = new HashSet<>();
+    /** Viewport used for the last ItemDisplay reconciliation. */
+    double itemDisplayCenterX = Double.NaN;
+    /** Viewport used for the last ItemDisplay reconciliation. */
+    double itemDisplayCenterZ = Double.NaN;
+    /** Viewport used for the last ItemDisplay reconciliation. */
+    double itemDisplayBlocksPerPixel = Double.NaN;
     /** Snapshot store for this session. */
     final AsyncChunkSnapshotStore mapSnapshotStore;
     /** Latest movement packets received from the client. */
@@ -74,8 +81,6 @@ final class LockViewState {
     int renderSamples;
     /** Last movement state applied by the tick loop. */
     MovementInput currentMovement;
-    /** Whether Space was held in the last received input packet. */
-    volatile boolean jumpHeld;
     /** Current map center X coordinate. */
     double mapCenterX;
     /** Current map center Z coordinate. */
@@ -102,8 +107,8 @@ final class LockViewState {
      * @param originalInvulnerable original invulnerability state
      * @param originalPlayerWeather original per-player weather override
      * @param originalGameMode original server game mode
-     * @param plugin owning plugin
      * @param renderCache persistent render cache
+     * @param snapshotScheduler shared bounded chunk scheduler
      */
     LockViewState(
             int cameraEntityId,
@@ -118,8 +123,8 @@ final class LockViewState {
             boolean originalInvulnerable,
             WeatherType originalPlayerWeather,
             GameMode originalGameMode,
-            JavaPlugin plugin,
-            PersistentChunkRenderCache renderCache
+            PersistentChunkRenderCache renderCache,
+            GlobalChunkSnapshotScheduler snapshotScheduler
     ) {
         this.cameraEntityId = cameraEntityId;
         this.anchor = anchor;
@@ -133,7 +138,11 @@ final class LockViewState {
         this.originalInvulnerable = originalInvulnerable;
         this.originalPlayerWeather = originalPlayerWeather;
         this.originalGameMode = originalGameMode;
-        this.mapSnapshotStore = new AsyncChunkSnapshotStore(plugin, world, renderCache);
+        this.mapSnapshotStore = new AsyncChunkSnapshotStore(
+                world,
+                renderCache,
+                snapshotScheduler
+        );
     }
 
     /**

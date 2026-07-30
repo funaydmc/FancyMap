@@ -10,6 +10,7 @@ import com.github.retrooper.packetevents.wrapper.play.client.WrapperPlayClientPl
 import com.github.retrooper.packetevents.wrapper.play.client.WrapperPlayClientPlayerRotation;
 import com.github.retrooper.packetevents.wrapper.play.client.WrapperPlayClientSteerVehicle;
 import com.github.retrooper.packetevents.wrapper.play.server.WrapperPlayServerHeldItemChange;
+import dev.funayd.fancyMap.input.MovementInput;
 import org.bukkit.entity.Player;
 
 /**
@@ -62,29 +63,25 @@ final class LockViewPacketListener implements PacketListener {
         if (event.getPacketType() == PacketType.Play.Client.PLAYER_INPUT) {
             WrapperPlayClientPlayerInput packet =
                     new WrapperPlayClientPlayerInput(event);
-            state.movementInput.add(new MovementInput(
+            MovementInput input = new MovementInput(
                     packet.isForward(),
                     packet.isBackward(),
                     packet.isLeft(),
                     packet.isRight(),
                     packet.isJump(),
                     packet.isShift()
-            ));
-            if (packet.isJump() && !state.jumpHeld) {
-                state.jumpHeld = true;
-                controller.openWaypointListFromInput(player);
-            } else if (!packet.isJump()) {
-                state.jumpHeld = false;
-            }
+            );
+            state.movementInput.add(input);
+            controller.handleKeyInput(player, input);
             if (packet.isShift()) {
                 packet.setShift(false);
                 event.markForReEncode(true);
-                controller.closeFromInput(player, state);
             }
             return;
         }
 
         if (event.getPacketType() == PacketType.Play.Client.HELD_ITEM_CHANGE) {
+            controller.cancelKeyActions(player);
             WrapperPlayClientHeldItemChange packet =
                     new WrapperPlayClientHeldItemChange(event);
             int currentSlot = packet.getSlot();
@@ -104,7 +101,7 @@ final class LockViewPacketListener implements PacketListener {
                     new WrapperPlayClientPlayerDigging(event);
             if (packet.getAction() == DiggingAction.SWAP_ITEM_WITH_OFFHAND) {
                 event.setCancelled(true);
-                controller.teleportToHovered(player, state);
+                controller.triggerKeyAction(player, "f");
             }
             return;
         }

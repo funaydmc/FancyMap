@@ -1,13 +1,15 @@
-package dev.funayd.fancyMap.lockview;
+package dev.funayd.fancyMap.command;
 
 import dev.funayd.fancyMap.FancyMapMessages;
+import dev.funayd.fancyMap.FancyMapPermissions;
+import dev.funayd.fancyMap.lockview.LockViewController;
+import dev.funayd.fancyMap.waypoint.WaypointListGui;
 import org.bukkit.command.Command;
 import org.bukkit.command.CommandExecutor;
 import org.bukkit.command.CommandSender;
 import org.bukkit.command.TabCompleter;
 import org.bukkit.entity.Player;
 import org.bukkit.Material;
-import dev.funayd.fancyMap.map.WaypointListGui;
 
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -49,6 +51,9 @@ public final class FancyMapCommand implements CommandExecutor, TabCompleter {
             String[] args
     ) {
         if (args.length == 1 && args[0].equalsIgnoreCase("reload")) {
+            if (!FancyMapPermissions.require(sender, FancyMapPermissions.RELOAD)) {
+                return true;
+            }
             lockViewController.reload();
             sender.sendMessage(FancyMapMessages.text("Reloaded config and textures."));
             return true;
@@ -56,6 +61,9 @@ public final class FancyMapCommand implements CommandExecutor, TabCompleter {
 
         if (args.length >= 2 && args[0].equalsIgnoreCase("waypoint")) {
             if (args[1].equalsIgnoreCase("list") && args.length == 2) {
+                if (!FancyMapPermissions.require(sender, FancyMapPermissions.WAYPOINT_LIST)) {
+                    return true;
+                }
                 if (!(sender instanceof Player player)) {
                     sender.sendMessage(FancyMapMessages.text("§cLệnh này chỉ dành cho người chơi."));
                     return true;
@@ -64,6 +72,9 @@ public final class FancyMapCommand implements CommandExecutor, TabCompleter {
                 return true;
             }
             if (args[1].equalsIgnoreCase("seek") && args.length == 3) {
+                if (!FancyMapPermissions.require(sender, FancyMapPermissions.USE)) {
+                    return true;
+                }
                 if (!(sender instanceof Player player)) {
                     sender.sendMessage(FancyMapMessages.text("§cLệnh này chỉ dành cho người chơi."));
                     return true;
@@ -74,6 +85,9 @@ public final class FancyMapCommand implements CommandExecutor, TabCompleter {
                 return true;
             }
             if (args[1].equalsIgnoreCase("tp") && args.length == 3) {
+                if (!FancyMapPermissions.require(sender, FancyMapPermissions.WAYPOINT_TELEPORT)) {
+                    return true;
+                }
                 if (!(sender instanceof Player player)) {
                     sender.sendMessage(FancyMapMessages.text("§cLệnh này chỉ dành cho người chơi."));
                     return true;
@@ -83,8 +97,7 @@ public final class FancyMapCommand implements CommandExecutor, TabCompleter {
                 }
                 return true;
             }
-            if (!sender.hasPermission("fancymap.admin")) {
-                sender.sendMessage(FancyMapMessages.text("§cBạn không có quyền quản lý waypoint."));
+            if (!FancyMapPermissions.require(sender, FancyMapPermissions.WAYPOINT_MANAGE)) {
                 return true;
             }
             if (args[1].equalsIgnoreCase("remove") && args.length == 3) {
@@ -137,11 +150,17 @@ public final class FancyMapCommand implements CommandExecutor, TabCompleter {
         }
 
         if (args.length == 0) {
+            if (!FancyMapPermissions.require(player, FancyMapPermissions.USE)) {
+                return true;
+            }
             lockViewController.toggle(player);
             return true;
         }
 
         if (args.length == 1 && args[0].equalsIgnoreCase("debug")) {
+            if (!FancyMapPermissions.require(player, FancyMapPermissions.DEBUG)) {
+                return true;
+            }
             boolean enabled = lockViewController.toggleDebug();
             player.sendMessage(FancyMapMessages.text(
                     enabled ? "§aĐã bật chế độ debug." : "§cĐã tắt chế độ debug."
@@ -150,15 +169,10 @@ public final class FancyMapCommand implements CommandExecutor, TabCompleter {
         }
 
         if (args.length == 3 && args[0].equalsIgnoreCase("config")) {
-            double value;
-            try {
-                value = Double.parseDouble(args[2]);
-            } catch (NumberFormatException exception) {
-                player.sendMessage(FancyMapMessages.text("§cGiá trị config phải là số."));
+            if (!FancyMapPermissions.require(player, FancyMapPermissions.CONFIG)) {
                 return true;
             }
-
-            if (!lockViewController.updateConfig(args[1], value)) {
+            if (!lockViewController.updateConfig(args[1], args[2])) {
                 player.sendMessage(FancyMapMessages.text(
                         "§cConfig không hợp lệ hoặc giá trị không được phép."
                 ));
@@ -184,10 +198,39 @@ public final class FancyMapCommand implements CommandExecutor, TabCompleter {
             String[] args
     ) {
         if (args.length == 1) {
-            return partialMatches(List.of("config", "debug", "reload", "waypoint"), args[0]);
+            List<String> values = new ArrayList<>();
+            if (FancyMapPermissions.has(sender, FancyMapPermissions.CONFIG)) {
+                values.add("config");
+            }
+            if (FancyMapPermissions.has(sender, FancyMapPermissions.DEBUG)) {
+                values.add("debug");
+            }
+            if (FancyMapPermissions.has(sender, FancyMapPermissions.RELOAD)) {
+                values.add("reload");
+            }
+            if (FancyMapPermissions.has(sender, FancyMapPermissions.USE)
+                    || FancyMapPermissions.has(sender, FancyMapPermissions.WAYPOINT_LIST)
+                    || FancyMapPermissions.has(sender, FancyMapPermissions.WAYPOINT_TELEPORT)
+                    || FancyMapPermissions.has(sender, FancyMapPermissions.WAYPOINT_MANAGE)) {
+                values.add("waypoint");
+            }
+            return partialMatches(values, args[0]);
         }
         if (args.length == 2 && args[0].equalsIgnoreCase("waypoint")) {
-            return partialMatches(List.of("create", "icon", "list", "remove", "seek", "tp"), args[1]);
+            List<String> values = new ArrayList<>();
+            if (FancyMapPermissions.has(sender, FancyMapPermissions.WAYPOINT_MANAGE)) {
+                values.addAll(List.of("create", "icon", "remove"));
+            }
+            if (FancyMapPermissions.has(sender, FancyMapPermissions.WAYPOINT_LIST)) {
+                values.add("list");
+            }
+            if (FancyMapPermissions.has(sender, FancyMapPermissions.USE)) {
+                values.add("seek");
+            }
+            if (FancyMapPermissions.has(sender, FancyMapPermissions.WAYPOINT_TELEPORT)) {
+                values.add("tp");
+            }
+            return partialMatches(values, args[1]);
         }
         if (args.length == 3
                 && args[0].equalsIgnoreCase("waypoint")

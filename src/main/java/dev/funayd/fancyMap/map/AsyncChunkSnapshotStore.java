@@ -1,232 +1,108 @@
 package dev.funayd.fancyMap.map;
 
-import org.bukkit.Bukkit;
-import org.bukkit.ChunkSnapshot;
 import org.bukkit.World;
-import org.bukkit.plugin.java.JavaPlugin;
 
-import java.util.Comparator;
-import java.util.Set;
 import java.util.UUID;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentMap;
-import java.util.concurrent.PriorityBlockingQueue;
-import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
- * Bounded, prioritized loader for chunk snapshots.
+ * Lightweight map-session view registered with the shared chunk scheduler.
  *
- * <p>Chunk requests are scheduled on the main thread in small batches while
- * snapshot processing remains asynchronous. Completed snapshots are released
- * after validation so large viewports do not retain all world data in memory.</p>
+ * <p>A session stores only its current viewport and a revision counter. Chunk
+ * requests and snapshots belong to {@link GlobalChunkSnapshotScheduler}, so a
+ * large viewport cannot allocate one request object per chunk.</p>
  */
 public final class AsyncChunkSnapshotStore implements AutoCloseable {
-    // ponytail: keep main-thread chunk requests bounded; increase only after profiling.
-    private static final int REQUESTS_PER_TICK = 2;
-    private static final int MAX_IN_FLIGHT_REQUESTS = 8;
-    private static final int MAX_VALIDATED_CHUNKS = 32_768;
-    private static final long RETRY_DELAY_TICKS = 20L;
-
-    private final JavaPlugin plugin;
     private final World world;
-    private final ConcurrentMap<Long, CompletableFuture<ChunkSnapshot>> snapshots =
-            new ConcurrentHashMap<>();
-    private final Set<Long> validated = ConcurrentHashMap.newKeySet();
-    private final Set<Long> unavailable = ConcurrentHashMap.newKeySet();
-    private final ConcurrentMap<Long, Request> queuedRequests =
-            new ConcurrentHashMap<>();
-    private final PriorityBlockingQueue<Request> requestQueue =
-            new PriorityBlockingQueue<>(64, Comparator
-                    .comparingLong(Request::priority)
-                    .thenComparingLong(Request::sequence));
-    private final AtomicBoolean drainScheduled = new AtomicBoolean();
-    private final AtomicInteger inFlightRequests = new AtomicInteger();
-    private final AtomicLong snapshotVersion = new AtomicLong();
-    private final AtomicLong requestSequence = new AtomicLong();
-    private final AtomicLong snapshotLoadCount = new AtomicLong();
-    private final AtomicLong snapshotLoadNanos = new AtomicLong();
-    private final AtomicLong longestSnapshotLoadNanos = new AtomicLong();
     private final PersistentChunkRenderCache renderCache;
+    private final GlobalChunkSnapshotScheduler scheduler;
+    private final AtomicLong snapshotVersion = new AtomicLong();
+    private volatile Viewport viewport;
     private volatile boolean closed;
-    private volatile Viewport retainedViewport;
 
     /**
-     * Creates a store for one world and one map session.
+     * Creates a session viewport backed by the shared scheduler.
      *
-     * @param plugin owning plugin
-     * @param world world whose chunks are requested
+     * @param world world shown by this session
      * @param renderCache persistent rendered-chunk cache
+     * @param scheduler shared bounded chunk scheduler
      */
     public AsyncChunkSnapshotStore(
-            JavaPlugin plugin,
             World world,
-            PersistentChunkRenderCache renderCache
+            PersistentChunkRenderCache renderCache,
+            GlobalChunkSnapshotScheduler scheduler
     ) {
-        this.plugin = plugin;
         this.world = world;
         this.renderCache = renderCache;
+        this.scheduler = scheduler;
         renderCache.register(this);
+        scheduler.register(this);
     }
 
     /**
-     * Requests a chunk with default priority.
-     *
-     * @param chunkX chunk X coordinate
-     * @param chunkZ chunk Z coordinate
-     * @return snapshot future, or an already-completed future for validated data
-     */
-    public CompletableFuture<ChunkSnapshot> request(int chunkX, int chunkZ) {
-        return request(chunkX, chunkZ, 0L);
-    }
-
-    /**
-     * Requests a chunk, where lower priority values load sooner.
-     *
-     * @param chunkX chunk X coordinate
-     * @param chunkZ chunk Z coordinate
-     * @param priority queue priority
-     * @return snapshot future
-     */
-    public CompletableFuture<ChunkSnapshot> request(
-            int chunkX,
-            int chunkZ,
-            long priority
-    ) {
-        long key = chunkKey(chunkX, chunkZ);
-        if (unavailable.contains(key)) {
-            return CompletableFuture.completedFuture(null);
-        }
-        if (validated.contains(key)
-                && renderCache.get(world, chunkX, chunkZ) != null) {
-            return CompletableFuture.completedFuture(null);
-        }
-        validated.remove(key);
-        CompletableFuture<ChunkSnapshot> future = snapshots.computeIfAbsent(
-                key,
-                ignored -> new CompletableFuture<>()
-        );
-        Request request = new Request(
-                chunkX,
-                chunkZ,
-                key,
-                Math.max(0L, priority),
-                requestSequence.getAndIncrement()
-        );
-        if (!closed && !future.isDone()
-                && queuedRequests.putIfAbsent(key, request) == null) {
-            requestQueue.add(request);
-            scheduleDrain();
-        }
-        return future;
-    }
-
-    /**
-     * Discards pending work outside the newest viewport.
+     * Replaces the viewport being filled, prioritizing its center chunk.
      *
      * @param minChunkX minimum visible chunk X
      * @param maxChunkX maximum visible chunk X
      * @param minChunkZ minimum visible chunk Z
      * @param maxChunkZ maximum visible chunk Z
+     * @param centerChunkX viewport center chunk X
+     * @param centerChunkZ viewport center chunk Z
      */
     public void retainViewport(
             int minChunkX,
             int maxChunkX,
             int minChunkZ,
-            int maxChunkZ
+            int maxChunkZ,
+            int centerChunkX,
+            int centerChunkZ
     ) {
-        retainedViewport = new Viewport(minChunkX, maxChunkX, minChunkZ, maxChunkZ);
-        requestQueue.removeIf(request -> !inside(
-                request.chunkX(),
-                request.chunkZ(),
+        Viewport next = new Viewport(
                 minChunkX,
                 maxChunkX,
                 minChunkZ,
-                maxChunkZ
-        ));
-        queuedRequests.entrySet().removeIf(entry -> !inside(
-                chunkX(entry.getKey()),
-                chunkZ(entry.getKey()),
-                minChunkX,
-                maxChunkX,
-                minChunkZ,
-                maxChunkZ
-        ));
-        snapshots.entrySet().removeIf(entry -> {
-            if (inside(
-                    chunkX(entry.getKey()),
-                    chunkZ(entry.getKey()),
-                    minChunkX,
-                    maxChunkX,
-                    minChunkZ,
-                    maxChunkZ
-            )) {
-                return false;
-            }
-            entry.getValue().cancel(false);
-            return true;
-        });
-        unavailable.removeIf(key -> !inside(
-                chunkX(key),
-                chunkZ(key),
-                minChunkX,
-                maxChunkX,
-                minChunkZ,
-                maxChunkZ
-        ));
-    }
-
-    /**
-     * Counts completed snapshots still retained for processing.
-     *
-     * @return number of completed retained snapshots
-     */
-    public int completedCount() {
-        int completed = 0;
-        for (CompletableFuture<ChunkSnapshot> snapshot : snapshots.values()) {
-            if (snapshot.isDone() && !snapshot.isCompletedExceptionally()) {
-                completed++;
-            }
+                maxChunkZ,
+                centerChunkX,
+                centerChunkZ
+        );
+        if (!next.equals(viewport)) {
+            viewport = next;
+            scheduler.wake();
         }
-        return completed;
     }
 
     /**
-     * Returns the session version used to trigger progressive refreshes.
+     * Returns the revision used to trigger a progressive canvas refresh.
      *
-     * @return current snapshot version
+     * @return incrementing revision of cached chunks in this viewport
      */
     public long snapshotVersion() {
         return snapshotVersion.get();
     }
 
     /**
-     * Returns the persistent cache associated with this store.
+     * Returns the persistent cache shared by all map sessions.
      *
-     * @return render cache
+     * @return rendered-chunk cache
      */
     public PersistentChunkRenderCache renderCache() {
         return renderCache;
     }
 
     /**
-     * Invalidates one chunk and schedules it for revalidation.
+     * Invalidates an active viewport after a world change.
      *
-     * @param chunkX chunk X coordinate
-     * @param chunkZ chunk Z coordinate
+     * @param chunkX changed chunk X
+     * @param chunkZ changed chunk Z
      */
     public void invalidate(int chunkX, int chunkZ) {
-        long key = chunkKey(chunkX, chunkZ);
-        validated.remove(key);
-        unavailable.remove(key);
-        snapshots.remove(key);
-        queuedRequests.remove(key);
-        snapshotVersion.incrementAndGet();
+        if (contains(chunkX, chunkZ)) {
+            snapshotVersion.incrementAndGet();
+            scheduler.wake();
+        }
     }
 
-    /** Invalidates the chunk only when the event belongs to this world. */
+    /** Invalidates one chunk only when it belongs to this session's world. */
     void invalidateIfWorld(World changedWorld, int chunkX, int chunkZ) {
         if (world.getUID().equals(changedWorld.getUID())) {
             invalidate(chunkX, chunkZ);
@@ -234,236 +110,174 @@ public final class AsyncChunkSnapshotStore implements AutoCloseable {
     }
 
     /**
-     * Cancels pending work and unregisters this session.
+     * Releases this session's viewport registration.
      */
     @Override
     public void close() {
+        if (closed) {
+            return;
+        }
         closed = true;
-        retainedViewport = null;
-        requestQueue.clear();
-        queuedRequests.clear();
-        validated.clear();
-        unavailable.clear();
-        snapshots.clear();
+        viewport = null;
+        scheduler.unregister(this);
         renderCache.unregister(this);
     }
 
-    /**
-     * Releases a processed snapshot and marks its chunk validated.
-     *
-     * @param chunkX chunk X coordinate
-     * @param chunkZ chunk Z coordinate
-     * @param future processed snapshot future
-     * @return true when this future was still current
-     */
-    public boolean markValidated(
-            int chunkX,
-            int chunkZ,
-            CompletableFuture<ChunkSnapshot> future
-    ) {
-        long key = chunkKey(chunkX, chunkZ);
-        if (!snapshots.remove(key, future)) {
-            return false;
-        }
-        validated.add(key);
-        trimValidated();
-        return true;
-    }
-
-    /**
-     * Returns compact runtime counters for diagnosing render stalls.
-     *
-     * @return current loader statistics
-     */
+    /** Returns bounded shared scheduler counters for debug output. */
     public String debugSummary() {
-        long loads = snapshotLoadCount.get();
-        long averageMillis = loads == 0L
-                ? 0L
-                : snapshotLoadNanos.get() / loads / 1_000_000L;
-        long longestMillis = longestSnapshotLoadNanos.get() / 1_000_000L;
-        return "pending=" + snapshots.size()
-                + ", queued=" + requestQueue.size()
-                + ", validated=" + validated.size()
-                + ", unavailable=" + unavailable.size()
-                + ", inFlight=" + inFlightRequests.get()
-                + ", loads=" + loads
-                + ", snapshotAvgMs=" + averageMillis
-                + ", snapshotMaxMs=" + longestMillis;
+        return scheduler.debugSummary();
     }
 
-    /** Schedules a bounded main-thread request drain. */
-    private void scheduleDrain() {
-        if (drainScheduled.compareAndSet(false, true)) {
-            Bukkit.getScheduler().runTask(plugin, this::drainOnMain);
-        }
+    /** Returns this session's world. */
+    World world() {
+        return world;
     }
 
-    /** Starts at most the configured number of chunk loads for this tick. */
-    private void drainOnMain() {
-        if (closed) {
-            drainScheduled.set(false);
-            requestQueue.clear();
-            queuedRequests.clear();
-            return;
-        }
+    /** Returns whether this session remains active. */
+    boolean isClosed() {
+        return closed;
+    }
 
-        int scheduled = 0;
-        Request request;
-        while (scheduled < REQUESTS_PER_TICK
-                && inFlightRequests.get() < MAX_IN_FLIGHT_REQUESTS
-                && (request = requestQueue.poll()) != null) {
-            queuedRequests.remove(request.key(), request);
-            CompletableFuture<ChunkSnapshot> future = snapshots.get(request.key());
-            if (future == null || future.isDone()) {
-                continue;
-            }
+    /** Returns whether a chunk is visible in the current viewport. */
+    boolean retains(UUID worldId, long key) {
+        return !closed && world.getUID().equals(worldId)
+                && contains(chunkX(key), chunkZ(key));
+    }
 
-            scheduled++;
-            loadSnapshot(request, future);
-        }
+    /** Returns the next center-first candidate chunk, or {@code null}. */
+    ChunkCoordinate nextCandidate() {
+        Viewport current = viewport;
+        return closed || current == null ? null : current.next();
+    }
 
-        if (!requestQueue.isEmpty()) {
-            Bukkit.getScheduler().runTaskLater(plugin, this::drainOnMain, 1L);
-            return;
-        }
-
-        drainScheduled.set(false);
-        if (!requestQueue.isEmpty()) {
-            scheduleDrain();
+    /** Notifies the session that a rendered chunk became available. */
+    void cached(World cachedWorld, int chunkX, int chunkZ) {
+        if (world.getUID().equals(cachedWorld.getUID()) && contains(chunkX, chunkZ)) {
+            snapshotVersion.incrementAndGet();
         }
     }
 
-    /** Captures one chunk snapshot and reports completion to its future. */
-    private void loadSnapshot(Request request, CompletableFuture<ChunkSnapshot> future) {
-        if (!world.isChunkGenerated(request.chunkX(), request.chunkZ())) {
-            if (snapshots.remove(request.key(), future)) {
-                unavailable.add(request.key());
-                future.complete(null);
-                snapshotVersion.incrementAndGet();
-            }
-            return;
-        }
-        // Paper completes this future on the main thread; snapshot capture stays
-        // on that safe boundary, while all pixel work remains on render workers.
-        inFlightRequests.incrementAndGet();
-        world.getChunkAtAsync(request.chunkX(), request.chunkZ(), false)
-                .whenComplete((chunk, exception) -> {
-                    try {
-                        if (snapshots.get(request.key()) != future) {
-                            return;
-                        }
-                        if (exception != null || chunk == null) {
-                            snapshots.remove(request.key(), future);
-                            future.completeExceptionally(exception == null
-                                    ? new IllegalStateException("Chunk unavailable")
-                                    : exception);
-                            snapshotVersion.incrementAndGet();
-                            retry(request);
-                            return;
-                        }
-                        long snapshotStarted = System.nanoTime();
-                        future.complete(chunk.getChunkSnapshot(true, false, false));
-                        long snapshotElapsed = System.nanoTime() - snapshotStarted;
-                        snapshotLoadCount.incrementAndGet();
-                        snapshotLoadNanos.addAndGet(snapshotElapsed);
-                        longestSnapshotLoadNanos.accumulateAndGet(
-                                snapshotElapsed,
-                                Math::max
-                        );
-                        snapshotVersion.incrementAndGet();
-                    } catch (Throwable snapshotException) {
-                        snapshots.remove(request.key(), future);
-                        future.completeExceptionally(snapshotException);
-                        snapshotVersion.incrementAndGet();
-                        retry(request);
-                    } finally {
-                        inFlightRequests.decrementAndGet();
-                    }
-                });
+    /** Returns whether the current viewport contains one chunk. */
+    private boolean contains(int chunkX, int chunkZ) {
+        Viewport current = viewport;
+        return current != null && current.contains(chunkX, chunkZ);
     }
 
-    /** Retries a failed chunk request after a short delay. */
-    private void retry(Request request) {
-        if (closed) {
-            return;
-        }
-        Bukkit.getScheduler().runTaskLater(plugin, () -> {
-            if (!closed && !snapshots.containsKey(request.key())) {
-                request(request.chunkX(), request.chunkZ(), request.priority());
-            }
-        }, RETRY_DELAY_TICKS);
-    }
-
-    /** Packs two chunk coordinates into one map key. */
-    private long chunkKey(int x, int z) {
+    /** Packs a chunk coordinate into the cache key format. */
+    private static long key(int x, int z) {
         return ((long) x << 32) ^ (z & 0xffffffffL);
     }
 
-    /** Extracts a signed X coordinate from a packed chunk key. */
-    private int chunkX(long key) {
+    /** Extracts chunk X from a packed key. */
+    private static int chunkX(long key) {
         return (int) (key >> 32);
     }
 
-    /** Extracts a signed Z coordinate from a packed chunk key. */
-    private int chunkZ(long key) {
+    /** Extracts chunk Z from a packed key. */
+    private static int chunkZ(long key) {
         return (int) key;
     }
 
-    /** Checks whether a chunk belongs to the active viewport bounds. */
-    private boolean inside(
-            int chunkX,
-            int chunkZ,
-            int minChunkX,
-            int maxChunkX,
-            int minChunkZ,
-            int maxChunkZ
-    ) {
-        return chunkX >= minChunkX
-                && chunkX <= maxChunkX
-                && chunkZ >= minChunkZ
-                && chunkZ <= maxChunkZ;
+    /** One chunk coordinate selected by a viewport cursor. */
+    record ChunkCoordinate(int x, int z) {
     }
 
-    /** Returns whether a chunk belongs to this store's currently visible viewport. */
-    boolean retains(UUID worldId, long key) {
-        Viewport viewport = retainedViewport;
-        return viewport != null
-                && world.getUID().equals(worldId)
-                && inside(
-                        chunkX(key),
-                        chunkZ(key),
-                        viewport.minChunkX(),
-                        viewport.maxChunkX(),
-                        viewport.minChunkZ(),
-                        viewport.maxChunkZ()
-                );
-    }
+    /**
+     * Mutable center-first square-ring cursor for one viewport.
+     */
+    private static final class Viewport {
+        private final int minX;
+        private final int maxX;
+        private final int minZ;
+        private final int maxZ;
+        private final int centerX;
+        private final int centerZ;
+        private final int maxRadius;
+        private int radius;
+        private int perimeterIndex;
 
-    /** Keeps per-session validation memory bounded during long map sessions. */
-    private void trimValidated() {
-        while (validated.size() > MAX_VALIDATED_CHUNKS) {
-            var iterator = validated.iterator();
-            if (!iterator.hasNext()) {
-                return;
-            }
-            validated.remove(iterator.next());
+        private Viewport(
+                int minX,
+                int maxX,
+                int minZ,
+                int maxZ,
+                int centerX,
+                int centerZ
+        ) {
+            this.minX = minX;
+            this.maxX = maxX;
+            this.minZ = minZ;
+            this.maxZ = maxZ;
+            this.centerX = centerX;
+            this.centerZ = centerZ;
+            maxRadius = Math.max(
+                    Math.max(Math.abs(minX - centerX), Math.abs(maxX - centerX)),
+                    Math.max(Math.abs(minZ - centerZ), Math.abs(maxZ - centerZ))
+            );
         }
-    }
 
-    private record Request(
-            int chunkX,
-            int chunkZ,
-            long key,
-            long priority,
-            long sequence
-    ) {
-    }
+        private boolean contains(int chunkX, int chunkZ) {
+            return chunkX >= minX && chunkX <= maxX && chunkZ >= minZ && chunkZ <= maxZ;
+        }
 
-    private record Viewport(
-            int minChunkX,
-            int maxChunkX,
-            int minChunkZ,
-            int maxChunkZ
-    ) {
+        private ChunkCoordinate next() {
+            while (radius <= maxRadius) {
+                if (radius == 0) {
+                    radius = 1;
+                    return contains(centerX, centerZ)
+                            ? new ChunkCoordinate(centerX, centerZ)
+                            : null;
+                }
+                int count = radius * 8;
+                if (perimeterIndex == count) {
+                    radius++;
+                    perimeterIndex = 0;
+                    continue;
+                }
+                ChunkCoordinate coordinate = perimeterCoordinate(radius, perimeterIndex++);
+                if (contains(coordinate.x(), coordinate.z())) {
+                    return coordinate;
+                }
+            }
+            return null;
+        }
+
+        private ChunkCoordinate perimeterCoordinate(int ring, int index) {
+            int topLength = ring * 2 + 1;
+            if (index < topLength) {
+                return new ChunkCoordinate(centerX - ring + index, centerZ - ring);
+            }
+            index -= topLength;
+            int edgeLength = ring * 2;
+            if (index < edgeLength) {
+                return new ChunkCoordinate(centerX + ring, centerZ - ring + 1 + index);
+            }
+            index -= edgeLength;
+            if (index < edgeLength) {
+                return new ChunkCoordinate(centerX + ring - 1 - index, centerZ + ring);
+            }
+            index -= edgeLength;
+            return new ChunkCoordinate(centerX - ring, centerZ + ring - 1 - index);
+        }
+
+        @Override
+        public boolean equals(Object other) {
+            if (!(other instanceof Viewport viewport)) {
+                return false;
+            }
+            return minX == viewport.minX && maxX == viewport.maxX
+                    && minZ == viewport.minZ && maxZ == viewport.maxZ
+                    && centerX == viewport.centerX && centerZ == viewport.centerZ;
+        }
+
+        @Override
+        public int hashCode() {
+            int result = Integer.hashCode(minX);
+            result = 31 * result + Integer.hashCode(maxX);
+            result = 31 * result + Integer.hashCode(minZ);
+            result = 31 * result + Integer.hashCode(maxZ);
+            result = 31 * result + Integer.hashCode(centerX);
+            return 31 * result + Integer.hashCode(centerZ);
+        }
     }
 }

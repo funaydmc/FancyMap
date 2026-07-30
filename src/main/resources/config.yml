@@ -3,6 +3,34 @@ map:
   map-horizontal-offset: -0.49
   map-vertical-offset: 1.28
   map-pan-speed: 4.0
+  fast-move-multiplier: 2.0
   min-zoom: 0.25
   max-zoom: 4.0
   default-zoom: 1.0
+  load-ungenerated-chunks: false
+chunk-scheduler:
+  # Global limits shared by every player with an open map.
+  requests-per-tick: 4
+  max-in-flight-requests: 16
+  snapshot-workers: 2
+  max-candidate-scans-per-tick: 512
+  max-retries: 3
+waypoint-display:
+  # Tokens: %fancymap_waypoint_id%, %fancymap_waypoint_name%, %fancymap_waypoint_world%,
+  # %fancymap_waypoint_x%, %fancymap_waypoint_y%, %fancymap_waypoint_z%, %fancymap_waypoint_icon%.
+  tooltip: "<yellow>%fancymap_waypoint_name%<newline><white>Press <lime>F <white>to teleport"
+  list:
+    name: "<yellow>%fancymap_waypoint_name%"
+    lore:
+      - "<gray>ID: <white>%fancymap_waypoint_id%"
+      - "<gray>World: <white>%fancymap_waypoint_world%"
+      - "<gray>X: <white>%fancymap_waypoint_x% <gray>Y: <white>%fancymap_waypoint_y% <gray>Z: <white>%fancymap_waypoint_z%"
+      - ""
+      - "<green>Click to view on map"
+actions:
+  # Supported keys: forward (W), backward (S), left (A), right (D), space, shift, F.
+  # Combine keys with + (for example: space+w). A completed chord suppresses its
+  # shorter actions, so releasing space+w never also triggers a space action.
+  shift: fancymap
+  space: fancymap waypoint list
+  f: fancymap waypoint tp %fancymap_hovering_waypoint%

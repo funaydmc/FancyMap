@@ -1,23 +1,9 @@
 package dev.funayd.fancyMap.map;
 
-import com.github.retrooper.packetevents.PacketEvents;
-import com.github.retrooper.packetevents.protocol.component.ComponentTypes;
-import com.github.retrooper.packetevents.protocol.entity.data.EntityData;
-import com.github.retrooper.packetevents.protocol.entity.data.EntityDataTypes;
-import com.github.retrooper.packetevents.protocol.entity.type.EntityTypes;
-import com.github.retrooper.packetevents.protocol.item.ItemStack;
-import com.github.retrooper.packetevents.protocol.item.type.ItemTypes;
-import com.github.retrooper.packetevents.protocol.world.BlockFace;
-import com.github.retrooper.packetevents.wrapper.PacketWrapper;
-import com.github.retrooper.packetevents.wrapper.play.server.WrapperPlayServerDestroyEntities;
-import com.github.retrooper.packetevents.wrapper.play.server.WrapperPlayServerEntityMetadata;
-import com.github.retrooper.packetevents.wrapper.play.server.WrapperPlayServerMapData;
-import com.github.retrooper.packetevents.wrapper.play.server.WrapperPlayServerSpawnEntity;
 import org.bukkit.Bukkit;
 import org.bukkit.Location;
 import org.bukkit.entity.Player;
 import org.bukkit.plugin.java.JavaPlugin;
-import dev.funayd.fancyMap.packet.PacketLocations;
 import dev.funayd.fancyMap.FancyMapMessages;
 
 import java.util.List;
@@ -49,6 +35,7 @@ public final class MapOverlay implements AutoCloseable {
     private final JavaPlugin plugin;
     private final BooleanSupplier debugEnabled;
     private final ExecutorService renderExecutor;
+    private final ClientMapPacketTransport packetTransport;
     private final AtomicInteger nextFrameEntityId =
             new AtomicInteger(FIRST_FRAME_ENTITY_ID);
     private final AtomicInteger nextMapId = new AtomicInteger(FIRST_MAP_ID);
@@ -64,6 +51,7 @@ public final class MapOverlay implements AutoCloseable {
     public MapOverlay(JavaPlugin plugin, BooleanSupplier debugEnabled) {
         this.plugin = plugin;
         this.debugEnabled = debugEnabled;
+        packetTransport = new ClientMapPacketTransport(plugin, debugEnabled);
         CanvasPlane.verifyCoordinateSystem();
         int threadCount = Math.min(4, Math.max(2,
                 Runtime.getRuntime().availableProcessors() / 2));
@@ -291,8 +279,9 @@ public final class MapOverlay implements AutoCloseable {
         }
 
         session.active = false;
+        session.cancelRender();
         if (player.isOnline()) {
-            send(player, new WrapperPlayServerDestroyEntities(session.entityIds()));
+            packetTransport.destroy(player, session.entityIds());
         }
     }
 
@@ -303,6 +292,7 @@ public final class MapOverlay implements AutoCloseable {
     public void close() {
         for (RenderSession session : activeSessions.values()) {
             session.active = false;
+            session.cancelRender();
         }
         activeSessions.clear();
         renderExecutor.shutdownNow();
@@ -319,7 +309,7 @@ public final class MapOverlay implements AutoCloseable {
                 CANVAS_WIDTH,
                 CANVAS_HEIGHT
         );
-        Frame[] frames = new Frame[COLUMNS * ROWS];
+        ClientMapFrame[] frames = new ClientMapFrame[COLUMNS * ROWS];
 
         for (int row = 0; row < ROWS; row++) {
             for (int column = 0; column < COLUMNS; column++) {
@@ -329,7 +319,7 @@ public final class MapOverlay implements AutoCloseable {
                         COLUMNS,
                         ROWS
                 );
-                frames[row * COLUMNS + column] = new Frame(
+                frames[row * COLUMNS + column] = new ClientMapFrame(
                         nextFrameEntityId.getAndDecrement(),
                         nextMapId.getAndIncrement(),
                         frameLocation.getX(),
@@ -370,7 +360,7 @@ public final class MapOverlay implements AutoCloseable {
             boolean spawnEntities,
             Runnable completion
     ) {
-        rendered
+        session.renderFuture = rendered.toCompletableFuture()
                 .thenApplyAsync(this::splitCanvas, renderExecutor)
                 .thenAccept(tiles -> Bukkit.getScheduler().runTask(
                         plugin,
@@ -392,9 +382,7 @@ public final class MapOverlay implements AutoCloseable {
 
     /** Starts the renderer without blocking the caller. */
     private CompletionStage<MapCanvas> startAsyncRender(AsyncMapCanvasRenderer renderer) {
-        return CompletableFuture
-                .supplyAsync(() -> renderer.render(renderExecutor), renderExecutor)
-                .thenCompose(stage -> stage.toCompletableFuture());
+        return renderer.render(renderExecutor);
     }
 
     /** Splits a combined canvas into mirrored 128×128 map tiles. */
@@ -465,69 +453,7 @@ public final class MapOverlay implements AutoCloseable {
             return;
         }
 
-        long sendStarted = System.nanoTime();
-        for (int index = 0; index < session.frames.length; index++) {
-            Frame frame = session.frames[index];
-            send(player, new WrapperPlayServerMapData(
-                    frame.mapId,
-                    (byte) 0,
-                    false,
-                    true,
-                    null,
-                    MAP_SIZE,
-                    MAP_SIZE,
-                    0,
-                    0,
-                    tiles[index]
-            ));
-            if (spawnEntities) {
-                ItemStack mapItem = ItemStack.builder()
-                        .type(ItemTypes.FILLED_MAP)
-                        .component(ComponentTypes.MAP_ID, frame.mapId)
-                        .build();
-
-                send(player, new WrapperPlayServerSpawnEntity(
-                        frame.entityId,
-                        UUID.randomUUID(),
-                        EntityTypes.GLOW_ITEM_FRAME,
-                        PacketLocations.at(
-                                frame.x,
-                                frame.y,
-                                frame.z,
-                                0.0F,
-                                0.0F
-                        ),
-                        0.0F,
-                        frame.direction,
-                        null
-                ));
-                send(player, new WrapperPlayServerEntityMetadata(
-                        frame.entityId,
-                        List.of(
-                                new EntityData<>(0, EntityDataTypes.BYTE, (byte) 0x20),
-                                new EntityData<>(
-                                        8,
-                                        EntityDataTypes.BLOCK_FACE,
-                                        frameFace(frame.direction)
-                                ),
-                                new EntityData<>(
-                                        9,
-                                        EntityDataTypes.ITEMSTACK,
-                                        mapItem
-                                ),
-                                new EntityData<>(10, EntityDataTypes.INT, 0)
-                        )
-                ));
-            }
-        }
-        long sendMillis = (System.nanoTime() - sendStarted) / 1_000_000L;
-        if (debugEnabled.getAsBoolean() && sendMillis >= 50L) {
-            plugin.getLogger().info(FancyMapMessages.consoleDebug(
-                    "player=" + player.getName()
-                            + " mapPacketSendMs=" + sendMillis
-                            + " packets=" + session.frames.length
-            ));
-        }
+        packetTransport.send(player, session.frames, tiles, spawnEntities);
     }
 
     /** Converts yaw into the protocol item-frame direction id. */
@@ -538,22 +464,6 @@ public final class MapOverlay implements AutoCloseable {
             case 2 -> 3;
             default -> 4;
         };
-    }
-
-    /** Converts a protocol direction id into a Bukkit block face. */
-    private BlockFace frameFace(int direction) {
-        return switch (direction) {
-            case 2 -> BlockFace.NORTH;
-            case 3 -> BlockFace.SOUTH;
-            case 4 -> BlockFace.WEST;
-            case 5 -> BlockFace.EAST;
-            default -> throw new IllegalArgumentException("Invalid item frame direction: " + direction);
-        };
-    }
-
-    /** Sends a PacketEvents packet to a player. */
-    private void send(Player player, PacketWrapper<?> packet) {
-        PacketEvents.getAPI().getPlayerManager().sendPacket(player, packet);
     }
 
     /** Logs the canonical canvas basis when map debugging is enabled. */
@@ -567,11 +477,12 @@ public final class MapOverlay implements AutoCloseable {
     }
 
     private static final class RenderSession {
-        private final Frame[] frames;
+        private final ClientMapFrame[] frames;
         private final CanvasPlane canvasPlane;
         private volatile boolean active = true;
+        private volatile CompletableFuture<?> renderFuture;
 
-        private RenderSession(Frame[] frames, CanvasPlane canvasPlane) {
+        private RenderSession(ClientMapFrame[] frames, CanvasPlane canvasPlane) {
             this.frames = frames;
             this.canvasPlane = canvasPlane;
         }
@@ -579,7 +490,7 @@ public final class MapOverlay implements AutoCloseable {
         private int[] entityIds() {
             int[] entityIds = new int[frames.length];
             for (int index = 0; index < frames.length; index++) {
-                entityIds[index] = frames[index].entityId;
+                entityIds[index] = frames[index].entityId();
             }
             return entityIds;
         }
@@ -587,15 +498,14 @@ public final class MapOverlay implements AutoCloseable {
         private Location canvasLocation(double canvasX, double canvasY, double depth) {
             return canvasPlane.canvasLocation(canvasX, canvasY, depth);
         }
+
+        /** Cancels work whose result can no longer be visible to the client. */
+        private void cancelRender() {
+            CompletableFuture<?> future = renderFuture;
+            if (future != null) {
+                future.cancel(true);
+            }
+        }
     }
 
-    private record Frame(
-            int entityId,
-            int mapId,
-            double x,
-            double y,
-            double z,
-            int direction
-    ) {
-    }
 }

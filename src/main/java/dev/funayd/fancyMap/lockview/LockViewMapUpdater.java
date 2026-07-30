@@ -2,16 +2,16 @@ package dev.funayd.fancyMap.lockview;
 
 import io.github.retrooper.packetevents.util.SpigotConversionUtil;
 import dev.funayd.fancyMap.FancyMapMessages;
-import dev.funayd.fancyMap.map.MapConfig;
+import dev.funayd.fancyMap.config.MapSettings;
+import dev.funayd.fancyMap.config.WaypointDisplaySettings;
+import dev.funayd.fancyMap.input.MovementInput;
 import dev.funayd.fancyMap.map.ClientCanvasDisplayHelper;
 import dev.funayd.fancyMap.map.MapOverlay;
 import dev.funayd.fancyMap.map.PersistentChunkRenderCache;
-import dev.funayd.fancyMap.map.Waypoint;
-import dev.funayd.fancyMap.map.WaypointManager;
 import dev.funayd.fancyMap.map.WorldMapRenderer;
 import dev.funayd.fancyMap.texture.TextureManager;
-import net.kyori.adventure.text.Component;
-import net.kyori.adventure.text.format.NamedTextColor;
+import dev.funayd.fancyMap.waypoint.Waypoint;
+import dev.funayd.fancyMap.waypoint.WaypointManager;
 import org.bukkit.Material;
 import org.bukkit.entity.Player;
 import org.bukkit.inventory.ItemStack;
@@ -35,10 +35,11 @@ final class LockViewMapUpdater {
 
     private final JavaPlugin plugin;
     private final MapOverlay mapOverlay;
-    private final MapConfig mapConfig;
+    private final MapSettings mapSettings;
     private final PersistentChunkRenderCache renderCache;
     private final TextureManager textureManager;
     private final WaypointManager waypointManager;
+    private final WaypointDisplaySettings waypointDisplaySettings;
     private final ClientCanvasDisplayHelper canvasDisplays;
     private final BooleanSupplier debugEnabled;
 
@@ -53,19 +54,21 @@ final class LockViewMapUpdater {
     LockViewMapUpdater(
             JavaPlugin plugin,
             MapOverlay mapOverlay,
-            MapConfig mapConfig,
+            MapSettings mapSettings,
             PersistentChunkRenderCache renderCache,
             TextureManager textureManager,
             WaypointManager waypointManager,
+            WaypointDisplaySettings waypointDisplaySettings,
             ClientCanvasDisplayHelper canvasDisplays,
             BooleanSupplier debugEnabled
     ) {
         this.plugin = plugin;
         this.mapOverlay = mapOverlay;
-        this.mapConfig = mapConfig;
+        this.mapSettings = mapSettings;
         this.renderCache = renderCache;
         this.textureManager = textureManager;
         this.waypointManager = waypointManager;
+        this.waypointDisplaySettings = waypointDisplaySettings;
         this.canvasDisplays = canvasDisplays;
         this.debugEnabled = debugEnabled;
     }
@@ -94,7 +97,8 @@ final class LockViewMapUpdater {
 
             MovementInput input = state.currentMovement;
             if (input != null && !input.isIdle()) {
-                double step = state.blocksPerPixel * mapConfig.getMapPanSpeed();
+                double step = state.blocksPerPixel * mapSettings.getMapPanSpeed()
+                        * (input.shift() ? mapSettings.getFastMoveMultiplier() : 1.0D);
                 state.mapCenterX = Math.rint(state.mapCenterX
                         + (input.left() ? step : 0.0D)
                         - (input.right() ? step : 0.0D));
@@ -109,9 +113,9 @@ final class LockViewMapUpdater {
             while ((zoomDelta = state.zoomInput.poll()) != null) {
                 double previous = state.blocksPerPixel;
                 state.blocksPerPixel = zoomDelta < 0
-                        ? Math.max(mapConfig.getMinZoom(),
+                        ? Math.max(mapSettings.getMinZoom(),
                         state.blocksPerPixel / MAP_ZOOM_FACTOR)
-                        : Math.min(mapConfig.getMaxZoom(),
+                        : Math.min(mapSettings.getMaxZoom(),
                         state.blocksPerPixel * MAP_ZOOM_FACTOR);
                 changed |= previous != state.blocksPerPixel;
             }
@@ -128,7 +132,7 @@ final class LockViewMapUpdater {
                 state.hoveredWaypointId = hoveredId;
                 changed = true;
             }
-            if (waypointChanged || (hoveredWaypoint != null && changed)) {
+            if (waypointChanged) {
                 updateTooltip(player, hoveredWaypoint, state);
             }
 
@@ -147,12 +151,9 @@ final class LockViewMapUpdater {
                             recordRender(player, state);
                             if (states.get(player.getUniqueId()) == state
                                     && player.isOnline()) {
-                                updateItemDisplays(
-                                        player,
-                                        state,
-                                        renderedCenterX,
-                                        renderedCenterZ,
-                                        renderedBlocksPerPixel
+                                updateItemDisplaysIfViewportChanged(
+                                        player, state, renderedCenterX,
+                                        renderedCenterZ, renderedBlocksPerPixel
                                 );
                             }
                             state.lastRenderedSnapshotVersion =
@@ -311,6 +312,25 @@ final class LockViewMapUpdater {
         state.visibleWaypointItemDisplays.addAll(visible);
     }
 
+    /** Avoids resending ItemDisplay packets for progressive chunk-only refreshes. */
+    private void updateItemDisplaysIfViewportChanged(
+            Player player,
+            LockViewState state,
+            double centerX,
+            double centerZ,
+            double blocksPerPixel
+    ) {
+        if (centerX == state.itemDisplayCenterX
+                && centerZ == state.itemDisplayCenterZ
+                && blocksPerPixel == state.itemDisplayBlocksPerPixel) {
+            return;
+        }
+        updateItemDisplays(player, state, centerX, centerZ, blocksPerPixel);
+        state.itemDisplayCenterX = centerX;
+        state.itemDisplayCenterZ = centerZ;
+        state.itemDisplayBlocksPerPixel = blocksPerPixel;
+    }
+
     /** Shows or hides the tooltip for the waypoint under the cursor. */
     private void updateTooltip(Player player, Waypoint waypoint, LockViewState state) {
         if (waypoint == null) {
@@ -322,17 +342,7 @@ final class LockViewMapUpdater {
                 "waypoint-tooltip",
                 MapOverlay.canvasXForScreenRight(WAYPOINT_TOOLTIP_OFFSET_X),
                 MapOverlay.canvasCenterY(),
-                Component.text(" " + waypoint.name() + " ", NamedTextColor.YELLOW)
-                        .append(Component.newline())
-                        .append(Component.text(
-                                " Press ",
-                                NamedTextColor.WHITE
-                        ))
-                        .append(Component.text("F", NamedTextColor.GREEN))
-                        .append(Component.text(
-                                " to teleport ",
-                                NamedTextColor.WHITE
-                        )),
+                waypointDisplaySettings.tooltip(player, waypoint),
                 1.0D,
                 ClientCanvasDisplayHelper.TextAnchor.MIDDLE_LEFT,
                 true

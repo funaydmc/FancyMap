@@ -1,4 +1,4 @@
-package dev.funayd.fancyMap.map;
+package dev.funayd.fancyMap.waypoint;
 
 import org.bukkit.Bukkit;
 import org.bukkit.Location;

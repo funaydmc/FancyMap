@@ -161,7 +161,8 @@ public final class ClientCanvasDisplayHelper {
                 scale,
                 TEXT_SURFACE_DEPTH,
                 EntityTypes.TEXT_DISPLAY,
-                textMetadata(text, scale, anchor, shadow)
+                textMetadata(text, scale, anchor, shadow),
+                true
         );
     }
 
@@ -191,7 +192,8 @@ public final class ClientCanvasDisplayHelper {
                 scale,
                 ITEM_SURFACE_DEPTH,
                 EntityTypes.ITEM_DISPLAY,
-                itemMetadata(item, scale)
+                itemMetadata(item, scale),
+                false
         );
     }
 
@@ -238,7 +240,8 @@ public final class ClientCanvasDisplayHelper {
             double scale,
             double surfaceDepth,
             EntityType entityType,
-            List<EntityData<?>> metadata
+            List<EntityData<?>> metadata,
+            boolean refreshMetadata
     ) {
         showAtLocation(
                 player,
@@ -251,7 +254,8 @@ public final class ClientCanvasDisplayHelper {
                 ),
                 entityType,
                 metadata,
-                scale
+                scale,
+                refreshMetadata
         );
     }
 
@@ -261,7 +265,8 @@ public final class ClientCanvasDisplayHelper {
             Location location,
             EntityType entityType,
             List<EntityData<?>> metadata,
-            double scale
+            double scale,
+            boolean refreshMetadata
     ) {
         if (key == null || key.isBlank() || !Double.isFinite(scale) || scale <= 0.0D) {
             throw new IllegalArgumentException("Display key and scale must be valid.");
@@ -286,10 +291,12 @@ public final class ClientCanvasDisplayHelper {
                     ),
                     false
             ));
-            send(player, new WrapperPlayServerEntityMetadata(
-                    existing.entityId(),
-                    metadata
-            ));
+            if (refreshMetadata) {
+                send(player, new WrapperPlayServerEntityMetadata(
+                        existing.entityId(),
+                        metadata
+                ));
+            }
             return;
         }
         if (existing != null) {

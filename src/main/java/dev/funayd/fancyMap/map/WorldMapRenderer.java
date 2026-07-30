@@ -1,12 +1,11 @@
 package dev.funayd.fancyMap.map;
 
 import dev.funayd.fancyMap.texture.MapTexture;
-import org.bukkit.ChunkSnapshot;
+import dev.funayd.fancyMap.waypoint.Waypoint;
 import org.bukkit.Material;
 import org.bukkit.World;
 import org.bukkit.plugin.java.JavaPlugin;
 
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
@@ -34,7 +33,6 @@ public final class WorldMapRenderer implements AsyncMapCanvasRenderer {
     private final World world;
     private final AsyncChunkSnapshotStore snapshotStore;
     private final PersistentChunkRenderCache renderCache;
-    private final int minHeight;
     private final double centerX;
     private final double centerZ;
     private final double blocksPerPixel;
@@ -90,7 +88,6 @@ public final class WorldMapRenderer implements AsyncMapCanvasRenderer {
         }
         Objects.requireNonNull(plugin, "plugin");
         this.world = Objects.requireNonNull(world, "world");
-        this.minHeight = world.getMinHeight();
         this.centerX = centerX;
         this.centerZ = centerZ;
         this.blocksPerPixel = blocksPerPixel;
@@ -102,17 +99,17 @@ public final class WorldMapRenderer implements AsyncMapCanvasRenderer {
         this.playerZ = playerZ;
         this.cursorTexture = Objects.requireNonNull(cursorTexture, "cursorTexture");
         this.playerTexture = Objects.requireNonNull(playerTexture, "playerTexture");
-        this.waypoints = List.copyOf(Objects.requireNonNull(waypoints, "waypoints"));
+        this.waypoints = Objects.requireNonNull(waypoints, "waypoints");
         this.hoveredWaypointId = hoveredWaypointId;
         this.waypointTexture = Objects.requireNonNull(waypointTexture, "waypointTexture");
         this.waypointHoverTexture = Objects.requireNonNull(
                 waypointHoverTexture,
                 "waypointHoverTexture"
         );
-        this.customWaypointTextures = Map.copyOf(Objects.requireNonNull(
+        this.customWaypointTextures = Objects.requireNonNull(
                 customWaypointTextures,
                 "customWaypointTextures"
-        ));
+        );
         this.debugMaterialWaypoints = debugMaterialWaypoints;
     }
 
@@ -132,61 +129,28 @@ public final class WorldMapRenderer implements AsyncMapCanvasRenderer {
         int maxChunkX = Math.floorDiv(maxBlockX, 16);
         int minChunkZ = Math.floorDiv(minBlockZ, 16);
         int maxChunkZ = Math.floorDiv(maxBlockZ, 16);
+        int centerChunkX = Math.floorDiv((int) Math.floor(centerX), 16);
+        int centerChunkZ = Math.floorDiv((int) Math.floor(centerZ), 16);
         snapshotStore.retainViewport(
                 minChunkX,
                 maxChunkX,
                 minChunkZ,
-                maxChunkZ
+                maxChunkZ,
+                centerChunkX,
+                centerChunkZ
         );
 
         int chunkCountX = maxChunkX - minChunkX + 1;
         int chunkCountZ = maxChunkZ - minChunkZ + 1;
-        List<CompletableFuture<ChunkSnapshot>> futures = new ArrayList<>(
-                chunkCountX * chunkCountZ
-        );
-        int centerChunkX = Math.floorDiv((int) Math.floor(centerX), 16);
-        int centerChunkZ = Math.floorDiv((int) Math.floor(centerZ), 16);
-        List<ChunkCoordinate> coordinates = new ArrayList<>(
-                chunkCountX * chunkCountZ
-        );
-        for (int chunkX = minChunkX; chunkX <= maxChunkX; chunkX++) {
-            for (int chunkZ = minChunkZ; chunkZ <= maxChunkZ; chunkZ++) {
-                coordinates.add(new ChunkCoordinate(chunkX, chunkZ));
-            }
-        }
-        for (ChunkCoordinate coordinate : coordinates) {
-            futures.add(snapshotStore.request(
-                    coordinate.x(),
-                    coordinate.z(),
-                    distanceSquared(coordinate, centerChunkX, centerChunkZ)
-            ));
-        }
 
         return CompletableFuture.supplyAsync(() -> {
-                    byte[][] chunkColors = new byte[futures.size()][];
-                    for (int index = 0; index < futures.size(); index++) {
-                        ChunkCoordinate coordinate = coordinates.get(index);
-                        int chunkX = coordinate.x();
-                        int chunkZ = coordinate.z();
+                    byte[][] chunkColors = new byte[chunkCountX * chunkCountZ][];
+                    for (int chunkX = minChunkX; chunkX <= maxChunkX; chunkX++) {
+                        for (int chunkZ = minChunkZ; chunkZ <= maxChunkZ; chunkZ++) {
                         int canvasIndex = (chunkX - minChunkX) * chunkCountZ
                                 + chunkZ - minChunkZ;
-                        CompletableFuture<ChunkSnapshot> future = futures.get(index);
-                        if (future.isDone() && !future.isCompletedExceptionally()) {
-                            ChunkSnapshot snapshot = future.getNow(null);
-                            if (snapshot != null) {
-                                if (renderCache.needsValidation(world, chunkX, chunkZ)) {
-                                    renderCache.update(
-                                            world,
-                                            chunkX,
-                                            chunkZ,
-                                            snapshot,
-                                            minHeight
-                                    );
-                                }
-                                snapshotStore.markValidated(chunkX, chunkZ, future);
-                            }
-                        }
                         chunkColors[canvasIndex] = renderCache.get(world, chunkX, chunkZ);
+                        }
                     }
                     return renderCanvas(
                             chunkColors,
@@ -237,7 +201,7 @@ public final class WorldMapRenderer implements AsyncMapCanvasRenderer {
                 }
                 int localX = localXs[pixelX];
                 int localZ = localZs[pixelY];
-                canvas.setPixel(pixelX, pixelY, colors[localZ * 16 + localX]);
+                canvas.setPixelUnchecked(pixelX, pixelY, colors[localZ * 16 + localX]);
             }
         }
         drawMarkers(canvas);
@@ -341,20 +305,6 @@ color = BLACK;
             palette[material.ordinal()] = color;
         }
         return palette;
-    }
-
-    /** Calculates chunk distance used by the prioritized loader. */
-    private static long distanceSquared(
-            ChunkCoordinate coordinate,
-            int centerChunkX,
-            int centerChunkZ
-    ) {
-        long dx = (long) coordinate.x() - centerChunkX;
-        long dz = (long) coordinate.z() - centerChunkZ;
-        return dx * dx + dz * dz;
-    }
-
-    private record ChunkCoordinate(int x, int z) {
     }
 
 }

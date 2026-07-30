@@ -16,6 +16,35 @@ commands:
       - fm
       - map
 permissions:
-  fancymap.admin:
-    description: Manage FancyMap waypoints
+  fancymap.use:
+    description: Open and control the FancyMap overlay
+    default: true
+  fancymap.debug:
+    description: Toggle FancyMap debug output
     default: op
+  fancymap.config:
+    description: Change FancyMap runtime configuration
+    default: op
+  fancymap.reload:
+    description: Reload FancyMap configuration and textures
+    default: op
+  fancymap.waypoint.list:
+    description: Open the FancyMap waypoint list
+    default: true
+  fancymap.waypoint.teleport:
+    description: Teleport to FancyMap waypoints
+    default: op
+  fancymap.waypoint.manage:
+    description: Create, remove and configure FancyMap waypoints
+    default: op
+  fancymap.admin:
+    description: Grant all FancyMap administrative permissions
+    default: op
+    children:
+      fancymap.use: true
+      fancymap.debug: true
+      fancymap.config: true
+      fancymap.reload: true
+      fancymap.waypoint.list: true
+      fancymap.waypoint.teleport: true
+      fancymap.waypoint.manage: true

@@ -1,4 +1,4 @@
-package dev.funayd.fancyMap.lockview;
+package dev.funayd.fancyMap.input;
 
 /**
  * Normalized movement/button state received from a locked player.
@@ -10,7 +10,7 @@ package dev.funayd.fancyMap.lockview;
  * @param jump whether Space/jump is held
  * @param shift whether Shift/sneak is held
  */
-record MovementInput(
+public record MovementInput(
         boolean forward,
         boolean backward,
         boolean left,
@@ -27,7 +27,7 @@ record MovementInput(
      * @param shift dismount/sneak input
      * @return normalized movement state
      */
-    static MovementInput from(float sideways, float forward, boolean jump, boolean shift) {
+    public static MovementInput from(float sideways, float forward, boolean jump, boolean shift) {
         return new MovementInput(
                 forward > 0.01F,
                 forward < -0.01F,
@@ -43,7 +43,7 @@ record MovementInput(
      *
      * @return true when idle
      */
-    boolean isIdle() {
+    public boolean isIdle() {
         return !forward && !backward && !left && !right && !jump && !shift;
     }
 
@@ -52,7 +52,7 @@ record MovementInput(
      *
      * @return compact button description
      */
-    String describe() {
+    public String describe() {
         StringBuilder result = new StringBuilder();
         append(result, forward, "W");
         append(result, backward, "S");

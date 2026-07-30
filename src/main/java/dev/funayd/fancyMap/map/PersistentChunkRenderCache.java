@@ -90,6 +90,13 @@ public final class PersistentChunkRenderCache implements AutoCloseable {
         return !worldCache(world).validated.contains(key(chunkX, chunkZ));
     }
 
+    /** Checks whether a reusable, validated chunk color entry is available. */
+    public boolean hasValidatedEntry(World world, int chunkX, int chunkZ) {
+        WorldCache cache = worldCache(world);
+        long key = key(chunkX, chunkZ);
+        return cache.entries.containsKey(key) && cache.validated.contains(key);
+    }
+
     /**
      * Rebuilds one compact chunk entry and schedules a persistent flush.
      *
@@ -147,6 +154,18 @@ public final class PersistentChunkRenderCache implements AutoCloseable {
         WorldCache cache = worldCache(world);
         return "cache=" + cache.entries.size() + "/" + MAX_IN_MEMORY_ENTRIES
                 + ", cacheEvictions=" + cache.evictions;
+    }
+
+    /**
+     * Flushes and releases cache memory for an unloaded world.
+     *
+     * @param world world being unloaded
+     */
+    public void unload(World world) {
+        WorldCache cache = worlds.remove(world.getUID());
+        if (cache != null) {
+            ioExecutor.execute(() -> flush(cache));
+        }
     }
 
     void register(AsyncChunkSnapshotStore store) {

@@ -1,5 +1,6 @@
-package dev.funayd.fancyMap.map;
+package dev.funayd.fancyMap.waypoint;
 
+import dev.funayd.fancyMap.config.WaypointDisplaySettings;
 import net.kyori.adventure.text.Component;
 import org.bukkit.Bukkit;
 import org.bukkit.Material;
@@ -25,6 +26,7 @@ public final class WaypointListGui implements Listener {
     private static final int NEXT_SLOT = 53;
 
     private final WaypointManager waypointManager;
+    private final WaypointDisplaySettings waypointDisplaySettings;
     private final BiConsumer<Player, String> seeker;
 
     /**
@@ -35,9 +37,11 @@ public final class WaypointListGui implements Listener {
      */
     public WaypointListGui(
             WaypointManager waypointManager,
+            WaypointDisplaySettings waypointDisplaySettings,
             BiConsumer<Player, String> seeker
     ) {
         this.waypointManager = waypointManager;
+        this.waypointDisplaySettings = waypointDisplaySettings;
         this.seeker = seeker;
     }
 
@@ -91,7 +95,7 @@ public final class WaypointListGui implements Listener {
         holder.inventory = inventory;
         int first = indexForPage(pageIndex);
         for (int slot = 0; slot < CONTENT_SIZE && first + slot < waypoints.size(); slot++) {
-            inventory.setItem(slot, waypointItem(waypoints.get(first + slot)));
+            inventory.setItem(slot, waypointItem(player, waypoints.get(first + slot)));
         }
         if (pageIndex > 0) {
             inventory.setItem(PREVIOUS_SLOT, button(Material.ARROW, "Previous"));
@@ -103,7 +107,7 @@ public final class WaypointListGui implements Listener {
     }
 
     /** Creates one clickable waypoint entry. */
-    private ItemStack waypointItem(Waypoint waypoint) {
+    private ItemStack waypointItem(Player player, Waypoint waypoint) {
         Material material = waypoint.iconMaterial() == null
                 ? Material.COMPASS
                 : Material.matchMaterial(waypoint.iconMaterial());
@@ -112,18 +116,8 @@ public final class WaypointListGui implements Listener {
         }
         ItemStack item = new ItemStack(material);
         ItemMeta meta = item.getItemMeta();
-        meta.displayName(Component.text(waypoint.name()));
-        meta.lore(List.of(
-                Component.text("ID: " + waypoint.id()),
-                Component.text(waypoint.worldName()),
-                Component.text(String.format(
-                        "X: %.1f  Y: %.1f  Z: %.1f",
-                        waypoint.x(),
-                        waypoint.y(),
-                        waypoint.z()
-                )),
-                Component.text("Click to view on map")
-        ));
+        meta.displayName(waypointDisplaySettings.listName(player, waypoint));
+        meta.lore(waypointDisplaySettings.listLore(player, waypoint));
         item.setItemMeta(meta);
         return item;
     }

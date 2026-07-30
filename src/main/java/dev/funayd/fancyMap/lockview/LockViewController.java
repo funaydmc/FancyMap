@@ -1,14 +1,22 @@
 package dev.funayd.fancyMap.lockview;
 
 import dev.funayd.fancyMap.FancyMapMessages;
-import dev.funayd.fancyMap.map.MapConfig;
+import dev.funayd.fancyMap.FancyMapPermissions;
+import dev.funayd.fancyMap.config.ConfigManager;
+import dev.funayd.fancyMap.config.ChunkSchedulerSettings;
+import dev.funayd.fancyMap.config.MapSettings;
+import dev.funayd.fancyMap.config.WaypointDisplaySettings;
+import dev.funayd.fancyMap.input.KeyActionBindings;
+import dev.funayd.fancyMap.input.MovementInput;
 import dev.funayd.fancyMap.map.ClientCanvasDisplayHelper;
+import dev.funayd.fancyMap.map.GlobalChunkSnapshotScheduler;
 import dev.funayd.fancyMap.map.MapOverlay;
 import dev.funayd.fancyMap.map.PersistentChunkRenderCache;
-import dev.funayd.fancyMap.map.Waypoint;
-import dev.funayd.fancyMap.map.WaypointManager;
 import dev.funayd.fancyMap.packet.PacketLocations;
 import dev.funayd.fancyMap.texture.TextureManager;
+import dev.funayd.fancyMap.waypoint.Waypoint;
+import dev.funayd.fancyMap.waypoint.WaypointManager;
+import me.clip.placeholderapi.PlaceholderAPI;
 import com.github.retrooper.packetevents.PacketEvents;
 import com.github.retrooper.packetevents.event.PacketListenerCommon;
 import com.github.retrooper.packetevents.event.PacketListenerPriority;
@@ -22,7 +30,6 @@ import com.github.retrooper.packetevents.wrapper.play.server.WrapperPlayServerDe
 import com.github.retrooper.packetevents.wrapper.play.server.WrapperPlayServerEntityMetadata;
 import com.github.retrooper.packetevents.wrapper.play.server.WrapperPlayServerHeldItemChange;
 import com.github.retrooper.packetevents.wrapper.play.server.WrapperPlayServerSpawnEntity;
-import net.kyori.adventure.text.Component;
 import org.bukkit.Bukkit;
 import org.bukkit.GameMode;
 import org.bukkit.Location;
@@ -40,7 +47,7 @@ import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.function.Consumer;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * Coordinates the player lock, client camera and map viewport lifecycle.
@@ -52,45 +59,77 @@ public final class LockViewController {
     private final JavaPlugin plugin;
     private final PacketListenerCommon packetListenerRegistration;
     private final BukkitTask timerTask;
-    private final MapConfig mapConfig;
+    private final ConfigManager configManager;
+    private final MapSettings mapSettings;
     private final MapOverlay mapOverlay;
     private final ClientCanvasDisplayHelper canvasDisplays;
     private final PersistentChunkRenderCache mapRenderCache;
+    private final GlobalChunkSnapshotScheduler snapshotScheduler;
     private final TextureManager textureManager;
     private final WaypointManager waypointManager;
     private final LockViewVisibility visibility;
     private final LockViewMapUpdater mapUpdater;
+    private final KeyActionBindings keyActionBindings;
     private final AtomicInteger nextCameraEntityId =
             new AtomicInteger(FIRST_CAMERA_ENTITY_ID);
     private final ConcurrentMap<UUID, LockViewState> states = new ConcurrentHashMap<>();
-    private volatile Consumer<Player> waypointListOpener = ignored -> { };
-    private volatile boolean debugEnabled;
+    private final AtomicBoolean debugEnabled;
     private long tickCounter;
 
     /**
      * Creates the lock controller, registers its packet listener and starts its tick loop.
      *
      * @param plugin owning plugin
+     * @param configManager shared configuration manager
+     * @param mapSettings map-specific configuration facade
+     * @param mapOverlay client-side map overlay
+     * @param canvasDisplays client-side display helper
+     * @param mapRenderCache persistent map cache
+     * @param textureManager texture registry
+     * @param waypointManager waypoint registry
+     * @param debugEnabled shared debug state
      */
-    public LockViewController(JavaPlugin plugin) {
+    public LockViewController(
+            JavaPlugin plugin,
+            ConfigManager configManager,
+            MapSettings mapSettings,
+            ChunkSchedulerSettings chunkSchedulerSettings,
+            MapOverlay mapOverlay,
+            ClientCanvasDisplayHelper canvasDisplays,
+            PersistentChunkRenderCache mapRenderCache,
+            TextureManager textureManager,
+            WaypointManager waypointManager,
+            WaypointDisplaySettings waypointDisplaySettings,
+            AtomicBoolean debugEnabled
+    ) {
         this.plugin = plugin;
-        mapConfig = new MapConfig(plugin);
-        mapOverlay = new MapOverlay(plugin, () -> debugEnabled);
-        canvasDisplays = new ClientCanvasDisplayHelper(mapOverlay);
-        mapRenderCache = new PersistentChunkRenderCache(plugin);
-        textureManager = new TextureManager(plugin);
-        waypointManager = new WaypointManager(plugin);
+        this.configManager = configManager;
+        this.mapSettings = mapSettings;
+        this.mapOverlay = mapOverlay;
+        this.canvasDisplays = canvasDisplays;
+        this.mapRenderCache = mapRenderCache;
+        snapshotScheduler = new GlobalChunkSnapshotScheduler(
+                plugin,
+                mapRenderCache,
+                chunkSchedulerSettings,
+                mapSettings::loadUngeneratedChunks
+        );
+        this.textureManager = textureManager;
+        this.waypointManager = waypointManager;
+        this.debugEnabled = debugEnabled;
         visibility = new LockViewVisibility(plugin, states);
         mapUpdater = new LockViewMapUpdater(
                 plugin,
                 mapOverlay,
-                mapConfig,
+                mapSettings,
                 mapRenderCache,
                 textureManager,
                 waypointManager,
+                waypointDisplaySettings,
                 canvasDisplays,
-                () -> debugEnabled
+                debugEnabled::get
         );
+        keyActionBindings = new KeyActionBindings(configManager, this::runKeyAction);
         packetListenerRegistration = PacketEvents.getAPI()
                 .getEventManager()
                 .registerListener(
@@ -112,6 +151,7 @@ public final class LockViewController {
         unlockAll();
         canvasDisplays.close();
         mapOverlay.close();
+        snapshotScheduler.close();
         mapRenderCache.close();
         timerTask.cancel();
         PacketEvents.getAPI()
@@ -126,6 +166,9 @@ public final class LockViewController {
      * @return true when the map is now open
      */
     public boolean toggle(Player player) {
+        if (!FancyMapPermissions.has(player, FancyMapPermissions.USE)) {
+            return false;
+        }
         if (states.containsKey(player.getUniqueId())) {
             unlock(player);
             return false;
@@ -134,36 +177,13 @@ public final class LockViewController {
         return lock(player);
     }
 
-    /** Sets the main-thread action run when Space opens the waypoint menu. */
-    public void setWaypointListOpener(Consumer<Player> waypointListOpener) {
-        this.waypointListOpener = waypointListOpener;
-    }
-
-    /** Schedules the waypoint menu from the asynchronous packet listener. */
-    void openWaypointListFromInput(Player player) {
-        plugin.getServer().getScheduler().runTask(plugin, () -> {
-            if (isLocked(player)) {
-                waypointListOpener.accept(player);
-            }
-        });
-    }
-
-    /**
-     * Returns the persistent cache used by the map listener.
-     *
-     * @return shared map render cache
-     */
-    public PersistentChunkRenderCache mapRenderCache() {
-        return mapRenderCache;
-    }
-
     /**
      * Returns the config keys registered by the active map components.
      *
      * @return canonical config keys
      */
     public List<String> configKeys() {
-        return mapConfig.keys();
+        return mapSettings.keys();
     }
 
     /**
@@ -172,19 +192,22 @@ public final class LockViewController {
      * @return the new debug state
      */
     public boolean toggleDebug() {
-        debugEnabled = !debugEnabled;
-        return debugEnabled;
+        boolean current;
+        do {
+            current = debugEnabled.get();
+        } while (!debugEnabled.compareAndSet(current, !current));
+        return !current;
     }
 
     /**
      * Updates a map configuration value and rebuilds active map sessions.
      *
      * @param key configuration key
-     * @param value new numeric value
+     * @param value new configuration value
      * @return true when the key was accepted
      */
-    public boolean updateConfig(String key, double value) {
-        if (mapConfig.update(key, value) == null) {
+    public boolean updateConfig(String key, String value) {
+        if (!mapSettings.update(key, value)) {
             return false;
         }
 
@@ -245,6 +268,9 @@ public final class LockViewController {
      * @return false when the waypoint or its world is unavailable
      */
     public boolean teleportToWaypoint(Player player, String id) {
+        if (!FancyMapPermissions.has(player, FancyMapPermissions.WAYPOINT_TELEPORT)) {
+            return false;
+        }
         Waypoint waypoint = waypointManager.get(id);
         Location target = waypoint == null ? null : waypoint.location();
         return target != null && player.teleport(target);
@@ -258,6 +284,9 @@ public final class LockViewController {
      * @return false when the waypoint is unavailable or belongs to another world
      */
     public boolean focusWaypoint(Player player, String id) {
+        if (!FancyMapPermissions.has(player, FancyMapPermissions.USE)) {
+            return false;
+        }
         Waypoint waypoint = waypointManager.get(id);
         if (waypoint == null || !waypoint.worldName().equals(player.getWorld().getName())) {
             return false;
@@ -277,8 +306,9 @@ public final class LockViewController {
 
     /** Reloads YAML, textures and all currently open map sessions. */
     public void reload() {
-        plugin.reloadConfig();
-        mapConfig.reload();
+        configManager.reload();
+        mapSettings.reload();
+        keyActionBindings.reload();
         waypointManager.reload();
         textureManager.reload();
         restartActiveSessions();
@@ -319,9 +349,9 @@ public final class LockViewController {
                 anchor,
                 lockedYaw,
                 mapCenter,
-                mapConfig.getMapDistance(),
-                mapConfig.getMapHorizontalOffset(),
-                mapConfig.getVerticalOffset(),
+                mapSettings.getMapDistance(),
+                mapSettings.getMapHorizontalOffset(),
+                mapSettings.getVerticalOffset(),
                 initialEye.getY() - anchor.getY()
         );
         if (!player.teleport(normalized)) {
@@ -340,14 +370,15 @@ public final class LockViewController {
                 mapCenter.getX(),
                 mapCenter.getZ(),
                 player.getInventory().getHeldItemSlot(),
-                mapConfig.getDefaultZoom(),
+                mapSettings.getDefaultZoom(),
                 player.isInvulnerable(),
                 player.getPlayerWeather(),
                 player.getGameMode(),
-                plugin,
-                mapRenderCache
+                mapRenderCache,
+                snapshotScheduler
         );
         states.put(player.getUniqueId(), state);
+        keyActionBindings.cancel(player);
         player.setInvulnerable(true);
         player.setPlayerWeather(WeatherType.CLEAR);
         send(player, new WrapperPlayServerChangeGameState(
@@ -375,24 +406,6 @@ public final class LockViewController {
                                 initialMapCenterX,
                                 initialMapCenterZ,
                                 initialBlocksPerPixel
-                        );
-                        canvasDisplays.showText(
-                                player,
-                                "canvas-corner-a",
-                                0.0D,
-                                0.0D,
-                                Component.text("A"),
-                                1.20D,
-                                ClientCanvasDisplayHelper.TextAnchor.TOP_LEFT
-                        );
-                        canvasDisplays.showText(
-                                player,
-                                "canvas-corner-b",
-                                MapOverlay.CANVAS_WIDTH - 1.0D,
-                                MapOverlay.CANVAS_HEIGHT - 1.0D,
-                                Component.text("B"),
-                                1.20D,
-                                ClientCanvasDisplayHelper.TextAnchor.BOTTOM_RIGHT
                         );
                         state.clientAirBlocks.addAll(visibility.hideNearbyBlocks(
                                 player,
@@ -513,6 +526,7 @@ public final class LockViewController {
         if (state == null) {
             return;
         }
+        keyActionBindings.cancel(player);
         state.mapSnapshotStore.close();
 
         if (player.isOnline()) {
@@ -606,30 +620,46 @@ public final class LockViewController {
         });
     }
 
-    /** Closes the map from a Shift packet on the server main thread. */
-    void closeFromInput(Player player, LockViewState state) {
+    /** Updates configured tap bindings from the packet listener. */
+    void handleKeyInput(Player player, MovementInput input) {
+        keyActionBindings.handle(player, input);
+    }
+
+    /** Triggers one configured instant action, such as the off-hand F key. */
+    void triggerKeyAction(Player player, String keyName) {
+        keyActionBindings.trigger(player, keyName);
+    }
+
+    /** Cancels active taps when another input family is used. */
+    void cancelKeyActions(Player player) {
+        keyActionBindings.cancel(player);
+    }
+
+    /** Runs one configured command on the Bukkit main thread. */
+    private void runKeyAction(Player player, String command) {
         plugin.getServer().getScheduler().runTask(plugin, () -> {
-            if (states.get(player.getUniqueId()) == state && player.isOnline()) {
-                unlock(player);
+            if (isLocked(player) && player.isOnline()) {
+                String resolved = command;
+                if (plugin.getServer().getPluginManager().isPluginEnabled("PlaceholderAPI")) {
+                    resolved = PlaceholderAPI.setPlaceholders(player, command);
+                }
+                player.performCommand(resolved);
             }
         });
     }
 
-    /** Teleports to the waypoint currently under the map cursor. */
-    void teleportToHovered(Player player, LockViewState state) {
-        Waypoint waypoint = waypointManager.get(state.hoveredWaypointId);
-        if (waypoint == null) {
-            return;
-        }
-        plugin.getServer().getScheduler().runTask(plugin, () -> {
-            if (states.get(player.getUniqueId()) != state || !player.isOnline()) {
-                return;
-            }
-            Location target = waypoint.location();
-            if (target != null) {
-                player.teleport(target);
-            }
-        });
+    /** Returns the id of the waypoint under this player's map cursor, or empty text. */
+    public String hoveringWaypointId(UUID playerId) {
+        Waypoint waypoint = hoveringWaypoint(playerId);
+        return waypoint == null ? "" : waypoint.id();
+    }
+
+    /** Returns the waypoint under this player's map cursor, or {@code null}. */
+    public Waypoint hoveringWaypoint(UUID playerId) {
+        LockViewState state = states.get(playerId);
+        return state == null || state.hoveredWaypointId == null
+                ? null
+                : waypointManager.get(state.hoveredWaypointId);
     }
 
     /**
@@ -679,7 +709,7 @@ public final class LockViewController {
                 }
 
                 state.currentMovement = input;
-                if (debugEnabled && player != null) {
+                if (debugEnabled.get() && player != null) {
                     player.sendMessage(FancyMapMessages.debug(input.isIdle()
                             ? "Đã thả các phím điều khiển."
                             : "Đang giữ: " + input.describe()));

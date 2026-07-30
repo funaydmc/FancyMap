@@ -59,6 +59,11 @@ public final class MapCanvas {
         }
     }
 
+    /** Sets a pixel known by the renderer to be within the canvas bounds. */
+    void setPixelUnchecked(int x, int y, byte color) {
+        pixels[y * width + x] = color;
+    }
+
     /**
      * Reads one pixel.
      *
