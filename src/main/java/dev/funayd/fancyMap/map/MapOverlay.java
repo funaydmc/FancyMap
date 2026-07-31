@@ -164,7 +164,15 @@ public final class MapOverlay implements AutoCloseable {
             }
             return;
         }
-        renderAsync(player, session, startAsyncRender(renderer), false, completion);
+        renderAsync(player, session, startAsyncRender(renderer), !session.framesSpawned, completion);
+    }
+
+    /** Cancels the in-flight render for one active overlay. */
+    public void cancelRender(Player player) {
+        RenderSession session = activeSessions.get(player.getUniqueId());
+        if (session != null) {
+            session.cancelRender();
+        }
     }
 
     /**
@@ -454,6 +462,7 @@ public final class MapOverlay implements AutoCloseable {
         }
 
         packetTransport.send(player, session.frames, tiles, spawnEntities);
+        session.framesSpawned = true;
     }
 
     /** Converts yaw into the protocol item-frame direction id. */
@@ -480,6 +489,7 @@ public final class MapOverlay implements AutoCloseable {
         private final ClientMapFrame[] frames;
         private final CanvasPlane canvasPlane;
         private volatile boolean active = true;
+        private volatile boolean framesSpawned;
         private volatile CompletableFuture<?> renderFuture;
 
         private RenderSession(ClientMapFrame[] frames, CanvasPlane canvasPlane) {

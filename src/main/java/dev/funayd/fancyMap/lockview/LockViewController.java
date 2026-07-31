@@ -35,6 +35,7 @@ import org.bukkit.GameMode;
 import org.bukkit.Location;
 import org.bukkit.Material;
 import org.bukkit.WeatherType;
+import org.bukkit.World;
 import org.bukkit.entity.Entity;
 import org.bukkit.entity.Player;
 import org.bukkit.scheduler.BukkitTask;
@@ -277,29 +278,64 @@ public final class LockViewController {
     }
 
     /**
-     * Opens the map when needed and centers it on a waypoint in the player's world.
+     * Opens the map when needed and centers it on a waypoint's world.
      *
      * @param player map viewer
      * @param id waypoint id
-     * @return false when the waypoint is unavailable or belongs to another world
+     * @return false when the waypoint or its world is unavailable
      */
     public boolean focusWaypoint(Player player, String id) {
         if (!FancyMapPermissions.has(player, FancyMapPermissions.USE)) {
             return false;
         }
         Waypoint waypoint = waypointManager.get(id);
-        if (waypoint == null || !waypoint.worldName().equals(player.getWorld().getName())) {
+        Location waypointLocation = waypoint == null ? null : waypoint.location();
+        if (waypointLocation == null) {
             return false;
         }
-        if (!isLocked(player) && !lock(player)) {
+        return focus(player, waypointLocation.getWorld(), waypoint.x(), waypoint.z());
+    }
+
+    /** Centers the open map on one coordinate, opening the player's current world when needed. */
+    public boolean gotoPosition(Player player, double x, double z) {
+        if (!FancyMapPermissions.has(player, FancyMapPermissions.USE)
+                || !Double.isFinite(x) || !Double.isFinite(z)) {
             return false;
         }
         LockViewState state = stateFor(player);
-        if (state == null || !state.world.getName().equals(waypoint.worldName())) {
+        return state == null
+                ? lock(player, player.getWorld(), x, z)
+                : focus(player, state.world, x, z);
+    }
+
+    /** Opens or switches the map to a world and centers it on the supplied coordinates. */
+    public boolean viewWorld(Player player, World world, double x, double z) {
+        if (!FancyMapPermissions.has(player, FancyMapPermissions.USE)
+                || world == null || !Double.isFinite(x) || !Double.isFinite(z)) {
             return false;
         }
-        state.mapCenterX = Math.rint(waypoint.x());
-        state.mapCenterZ = Math.rint(waypoint.z());
+        return focus(player, world, x, z);
+    }
+
+    /** Applies a world and center change to the current map session. */
+    private boolean focus(Player player, World world, double x, double z) {
+        if (!isLocked(player)) {
+            return lock(player, world, x, z);
+        }
+        LockViewState state = stateFor(player);
+        if (state == null) {
+            return false;
+        }
+        if (state.switchWorld(world)) {
+            mapOverlay.cancelRender(player);
+            canvasDisplays.hide(player, "waypoint-tooltip");
+            for (String key : state.visibleWaypointItemDisplays) {
+                canvasDisplays.hide(player, key);
+            }
+            state.visibleWaypointItemDisplays.clear();
+        }
+        state.mapCenterX = Math.rint(x);
+        state.mapCenterZ = Math.rint(z);
         state.focusRequested = true;
         return true;
     }
@@ -333,6 +369,11 @@ public final class LockViewController {
      */
     /** Creates the camera, visibility state and asynchronous map session. */
     private boolean lock(Player player) {
+        return lock(player, null, 0.0D, 0.0D);
+    }
+
+    /** Creates a session that initially renders the supplied map world when present. */
+    private boolean lock(Player player, World requestedWorld, double requestedCenterX, double requestedCenterZ) {
         if (player.isInsideVehicle()) {
             player.sendMessage(FancyMapMessages.text(
                     "§cKhông thể khóa khi đang ngồi trên phương tiện khác."
@@ -344,6 +385,9 @@ public final class LockViewController {
         Location initialEye = player.getEyeLocation().clone();
         float lockedYaw = LOCKED_YAW;
         Location mapCenter = MapOverlay.mapCenter(initialEye, lockedYaw);
+        World renderedWorld = requestedWorld == null ? mapCenter.getWorld() : requestedWorld;
+        double renderedCenterX = requestedWorld == null ? mapCenter.getX() : Math.rint(requestedCenterX);
+        double renderedCenterZ = requestedWorld == null ? mapCenter.getZ() : Math.rint(requestedCenterZ);
 
         Location normalized = normalizePlayerLocation(
                 anchor,
@@ -366,9 +410,9 @@ public final class LockViewController {
                 anchor,
                 lockedYaw,
                 0.0F,
-                mapCenter.getWorld(),
-                mapCenter.getX(),
-                mapCenter.getZ(),
+                renderedWorld,
+                renderedCenterX,
+                renderedCenterZ,
                 player.getInventory().getHeldItemSlot(),
                 mapSettings.getDefaultZoom(),
                 player.isInvulnerable(),
@@ -388,6 +432,7 @@ public final class LockViewController {
         visibility.hideEntities(player, state);
         state.renderSnapshotVersion = state.snapshotVersion();
         state.renderStartedAtNanos = System.nanoTime();
+        long initialRenderWorldRevision = state.renderWorldRevision;
         double initialMapCenterX = state.mapCenterX;
         double initialMapCenterZ = state.mapCenterZ;
         double initialBlocksPerPixel = state.blocksPerPixel;
@@ -398,7 +443,8 @@ public final class LockViewController {
                 mapUpdater.createRenderer(state),
                 () -> {
                     if (states.get(player.getUniqueId()) == state
-                            && player.isOnline()) {
+                            && player.isOnline()
+                            && state.renderWorldRevision == initialRenderWorldRevision) {
                         mapUpdater.recordRender(player, state);
                         mapUpdater.updateItemDisplays(
                                 player,
@@ -415,9 +461,9 @@ public final class LockViewController {
                                 player,
                                 player.getEyeLocation()
                         ));
+                        state.lastRenderedSnapshotVersion = state.renderSnapshotVersion;
+                        state.mapRenderPending = false;
                     }
-                    state.lastRenderedSnapshotVersion = state.renderSnapshotVersion;
-                    state.mapRenderPending = false;
                 }
         );
 

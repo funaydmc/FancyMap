@@ -77,7 +77,7 @@ public final class FancyMap extends JavaPlugin {
                 (player, id) -> {
                     if (!lockViewController.focusWaypoint(player, id)) {
                         player.sendMessage(FancyMapMessages.text(
-                                "§cWaypoint không thuộc thế giới hiện tại hoặc không khả dụng."
+                                "§cWaypoint hoặc world không khả dụng."
                         ));
                     }
                 }

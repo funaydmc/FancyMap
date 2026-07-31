@@ -40,6 +40,7 @@ public final class WorldMapRenderer implements AsyncMapCanvasRenderer {
     private final int height;
     private final double playerX;
     private final double playerZ;
+    private final boolean showPlayerMarker;
     private final MapTexture cursorTexture;
     private final MapTexture playerTexture;
     private final MapTexture waypointTexture;
@@ -74,6 +75,7 @@ public final class WorldMapRenderer implements AsyncMapCanvasRenderer {
             PersistentChunkRenderCache renderCache,
             double playerX,
             double playerZ,
+            boolean showPlayerMarker,
             MapTexture cursorTexture,
             MapTexture playerTexture,
             List<Waypoint> waypoints,
@@ -97,6 +99,7 @@ public final class WorldMapRenderer implements AsyncMapCanvasRenderer {
         this.renderCache = Objects.requireNonNull(renderCache, "renderCache");
         this.playerX = playerX;
         this.playerZ = playerZ;
+        this.showPlayerMarker = showPlayerMarker;
         this.cursorTexture = Objects.requireNonNull(cursorTexture, "cursorTexture");
         this.playerTexture = Objects.requireNonNull(playerTexture, "playerTexture");
         this.waypoints = Objects.requireNonNull(waypoints, "waypoints");
@@ -222,7 +225,9 @@ public final class WorldMapRenderer implements AsyncMapCanvasRenderer {
                 this.centerZ,
                 blocksPerPixel
         ));
-        playerTexture.drawCentered(canvas, playerPixelX, playerPixelY);
+        if (showPlayerMarker) {
+            playerTexture.drawCentered(canvas, playerPixelX, playerPixelY);
+        }
         for (Waypoint waypoint : waypoints) {
             if (!waypoint.worldName().equals(world.getName())) {
                 continue;

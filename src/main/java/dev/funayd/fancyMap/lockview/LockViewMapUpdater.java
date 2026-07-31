@@ -141,6 +141,7 @@ final class LockViewMapUpdater {
                 state.focusRequested = false;
                 state.renderSnapshotVersion = state.snapshotVersion();
                 state.renderStartedAtNanos = System.nanoTime();
+                long renderedWorldRevision = state.renderWorldRevision;
                 double renderedCenterX = state.mapCenterX;
                 double renderedCenterZ = state.mapCenterZ;
                 double renderedBlocksPerPixel = state.blocksPerPixel;
@@ -148,17 +149,18 @@ final class LockViewMapUpdater {
                         player,
                         createRenderer(state),
                         () -> {
-                            recordRender(player, state);
                             if (states.get(player.getUniqueId()) == state
-                                    && player.isOnline()) {
+                                    && player.isOnline()
+                                    && state.renderWorldRevision == renderedWorldRevision) {
+                                recordRender(player, state);
                                 updateItemDisplaysIfViewportChanged(
                                         player, state, renderedCenterX,
                                         renderedCenterZ, renderedBlocksPerPixel
                                 );
+                                state.lastRenderedSnapshotVersion =
+                                        state.renderSnapshotVersion;
+                                state.mapRenderPending = false;
                             }
-                            state.lastRenderedSnapshotVersion =
-                                    state.renderSnapshotVersion;
-                            state.mapRenderPending = false;
                         }
                 );
             }
@@ -241,6 +243,7 @@ final class LockViewMapUpdater {
                 renderCache,
                 state.anchor.getX(),
                 state.anchor.getZ(),
+                state.anchor.getWorld().getUID().equals(state.world.getUID()),
                 textureManager.cursor(),
                 textureManager.player(),
                 waypointManager.all(),

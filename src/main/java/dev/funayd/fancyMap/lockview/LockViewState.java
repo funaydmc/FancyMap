@@ -31,8 +31,8 @@ final class LockViewState {
     final float lockedYaw;
     /** Fixed camera pitch. */
     final float lockedPitch;
-    /** World rendered by the map. */
-    final World world;
+    /** World currently rendered by the map. */
+    World world;
     /** Player invulnerability state before locking. */
     final boolean originalInvulnerable;
     /** Player-specific weather before locking. */
@@ -56,7 +56,11 @@ final class LockViewState {
     /** Viewport used for the last ItemDisplay reconciliation. */
     double itemDisplayBlocksPerPixel = Double.NaN;
     /** Snapshot store for this session. */
-    final AsyncChunkSnapshotStore mapSnapshotStore;
+    AsyncChunkSnapshotStore mapSnapshotStore;
+    /** Shared cache used when replacing the session's map world. */
+    private final PersistentChunkRenderCache renderCache;
+    /** Shared scheduler used when replacing the session's map world. */
+    private final GlobalChunkSnapshotScheduler snapshotScheduler;
     /** Latest movement packets received from the client. */
     final ConcurrentLinkedQueue<MovementInput> movementInput =
             new ConcurrentLinkedQueue<>();
@@ -71,6 +75,8 @@ final class LockViewState {
     long lastRenderedSnapshotVersion;
     /** Snapshot version captured when the current render started. */
     long renderSnapshotVersion;
+    /** Increments when a stale async render must not update this session. */
+    long renderWorldRevision;
     /** Next tick at which progressive refresh may run. */
     long nextSnapshotRefreshTick;
     /** Start time for the current render metric. */
@@ -138,6 +144,8 @@ final class LockViewState {
         this.originalInvulnerable = originalInvulnerable;
         this.originalPlayerWeather = originalPlayerWeather;
         this.originalGameMode = originalGameMode;
+        this.renderCache = renderCache;
+        this.snapshotScheduler = snapshotScheduler;
         this.mapSnapshotStore = new AsyncChunkSnapshotStore(
                 world,
                 renderCache,
@@ -152,5 +160,25 @@ final class LockViewState {
      */
     long snapshotVersion() {
         return mapSnapshotStore.snapshotVersion();
+    }
+
+    /** Changes the rendered world while retaining the same client-side camera and overlay. */
+    boolean switchWorld(World nextWorld) {
+        if (world.getUID().equals(nextWorld.getUID())) {
+            return false;
+        }
+        mapSnapshotStore.close();
+        world = nextWorld;
+        mapSnapshotStore = new AsyncChunkSnapshotStore(nextWorld, renderCache, snapshotScheduler);
+        hoveredWaypointId = null;
+        itemDisplayCenterX = Double.NaN;
+        itemDisplayCenterZ = Double.NaN;
+        itemDisplayBlocksPerPixel = Double.NaN;
+        lastRenderedSnapshotVersion = 0L;
+        renderSnapshotVersion = 0L;
+        nextSnapshotRefreshTick = 0L;
+        mapRenderPending = false;
+        renderWorldRevision++;
+        return true;
     }
 }

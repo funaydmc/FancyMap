@@ -25,11 +25,13 @@ The plugin creates `plugins/FancyMap/config.yml`, waypoint data and a `textures`
 | `/fm debug` | Toggle debug output. |
 | `/fm reload` | Reload configuration and textures. |
 | `/fm config <key> <value>` | Change a runtime map setting. |
+| `/fm goto <x> <z>` | Center the current map world on a coordinate. Opens the current world when closed. |
+| `/fm world <world> [x] [z]` | View another loaded world at the supplied coordinate, or `0 0`. |
 | `/fm waypoint create <id> <name>` | Create a waypoint at your position. |
 | `/fm waypoint remove <id>` | Remove a waypoint. |
 | `/fm waypoint icon <id> <material\|texture>` | Set a Material or texture icon. |
 | `/fm waypoint list` | Open the waypoint list. |
-| `/fm waypoint seek <id>` | Open the map and center it on a waypoint. |
+| `/fm waypoint seek <id>` | Open the waypoint's world and center it on the waypoint. |
 | `/fm waypoint tp <id>` | Teleport to a waypoint. |
 
 Aliases: `/fancymap`, `/fm`, `/map`.

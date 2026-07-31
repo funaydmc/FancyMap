@@ -8,8 +8,10 @@ import org.bukkit.command.Command;
 import org.bukkit.command.CommandExecutor;
 import org.bukkit.command.CommandSender;
 import org.bukkit.command.TabCompleter;
+import org.bukkit.Bukkit;
 import org.bukkit.entity.Player;
 import org.bukkit.Material;
+import org.bukkit.World;
 
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -80,7 +82,7 @@ public final class FancyMapCommand implements CommandExecutor, TabCompleter {
                     return true;
                 }
                 if (!lockViewController.focusWaypoint(player, args[2])) {
-                    player.sendMessage(FancyMapMessages.text("§cKhông tìm thấy waypoint hoặc waypoint thuộc thế giới khác."));
+                    player.sendMessage(FancyMapMessages.text("§cKhông tìm thấy waypoint hoặc world không khả dụng."));
                 }
                 return true;
             }
@@ -149,6 +151,32 @@ public final class FancyMapCommand implements CommandExecutor, TabCompleter {
             return true;
         }
 
+        if (args.length == 3 && args[0].equalsIgnoreCase("goto")) {
+            if (!FancyMapPermissions.require(player, FancyMapPermissions.USE)) {
+                return true;
+            }
+            Double x = coordinate(args[1]);
+            Double z = coordinate(args[2]);
+            if (x == null || z == null || !lockViewController.gotoPosition(player, x, z)) {
+                player.sendMessage(FancyMapMessages.text("§cTọa độ không hợp lệ."));
+            }
+            return true;
+        }
+
+        if ((args.length == 2 || args.length == 4) && args[0].equalsIgnoreCase("world")) {
+            if (!FancyMapPermissions.require(player, FancyMapPermissions.USE)) {
+                return true;
+            }
+            World world = Bukkit.getWorld(args[1]);
+            Double x = args.length == 4 ? coordinate(args[2]) : 0.0D;
+            Double z = args.length == 4 ? coordinate(args[3]) : 0.0D;
+            if (world == null || x == null || z == null
+                    || !lockViewController.viewWorld(player, world, x, z)) {
+                player.sendMessage(FancyMapMessages.text("§cWorld hoặc tọa độ không hợp lệ."));
+            }
+            return true;
+        }
+
         if (args.length == 0) {
             if (!FancyMapPermissions.require(player, FancyMapPermissions.USE)) {
                 return true;
@@ -184,7 +212,9 @@ public final class FancyMapCommand implements CommandExecutor, TabCompleter {
         }
 
         player.sendMessage(FancyMapMessages.text(
-                "§cSử dụng: /fancymap | /fancymap debug | /fancymap config <config_key> <config_value>"
+                "§cSử dụng: /fancymap | /fancymap goto <x> <z> | "
+                        + "/fancymap world <world> [x] [z] | /fancymap debug | "
+                        + "/fancymap config <config_key> <config_value>"
         ));
         return true;
     }
@@ -213,6 +243,9 @@ public final class FancyMapCommand implements CommandExecutor, TabCompleter {
                     || FancyMapPermissions.has(sender, FancyMapPermissions.WAYPOINT_TELEPORT)
                     || FancyMapPermissions.has(sender, FancyMapPermissions.WAYPOINT_MANAGE)) {
                 values.add("waypoint");
+            }
+            if (FancyMapPermissions.has(sender, FancyMapPermissions.USE)) {
+                values.addAll(List.of("goto", "world"));
             }
             return partialMatches(values, args[0]);
         }
@@ -250,7 +283,20 @@ public final class FancyMapCommand implements CommandExecutor, TabCompleter {
         if (args.length == 2 && args[0].equalsIgnoreCase("config")) {
             return partialMatches(lockViewController.configKeys(), args[1]);
         }
+        if (args.length == 2 && args[0].equalsIgnoreCase("world")) {
+            return partialMatches(Bukkit.getWorlds().stream().map(World::getName).toList(), args[1]);
+        }
         return List.of();
+    }
+
+    /** Parses one finite coordinate supplied by a command sender. */
+    private Double coordinate(String value) {
+        try {
+            double coordinate = Double.parseDouble(value);
+            return Double.isFinite(coordinate) ? coordinate : null;
+        } catch (NumberFormatException ignored) {
+            return null;
+        }
     }
 
     /** Filters completion values by the current argument prefix. */
