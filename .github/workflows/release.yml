@@ -20,6 +20,9 @@ jobs:
           java-version: '21'
           cache: gradle
 
+      - name: Prepare Gradle wrapper
+        run: chmod +x gradlew
+
       - name: Build
         run: ./gradlew build
 
@@ -29,6 +32,8 @@ jobs:
         run: |
           VERSION="$(./gradlew -q properties --property version | awk -F': ' '/^version:/{print $2}')"
           TAG="v${VERSION}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git tag -a "$TAG" -m "Release $TAG"
           git push origin "$TAG"
           gh release create "$TAG" build/libs/FancyMap-"$VERSION".jar --generate-notes --title "$TAG"
