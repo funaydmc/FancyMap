@@ -6,13 +6,13 @@ FancyMap is a Paper 1.21.11 plugin that opens a client-side world map with keybo
 
 - Paper 1.21.11
 - Java 21
-- [PacketEvents](https://modrinth.com/plugin/packetevents) 2.13.0+
+- **[PacketEvents](https://modrinth.com/plugin/packetevents) 2.13.0+ (bắt buộc).** FancyMap không thể khởi động nếu PacketEvents chưa được cài đặt.
 - PlaceholderAPI is optional. FancyMap placeholders work without it; install it to use placeholders from other plugins in FancyMap templates.
 
 ## Install
 
 1. Download `FancyMap-<version>.jar` from [Releases](../../releases).
-2. Put it and PacketEvents in the server `plugins` folder.
+2. Put it and **PacketEvents** in the server `plugins` folder.
 3. Restart the server.
 
 The plugin creates `plugins/FancyMap/config.yml`, waypoint data and a `textures` folder. Add custom `PNG` textures there, then run `/fm reload`.
