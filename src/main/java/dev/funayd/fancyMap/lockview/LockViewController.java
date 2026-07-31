@@ -189,7 +189,7 @@ public final class LockViewController {
     }
 
     /**
-     * Toggles debug messages for lock and render diagnostics.
+     * Toggles debug diagnostics for lock and render state.
      *
      * @return the new debug state
      */
@@ -198,7 +198,9 @@ public final class LockViewController {
         do {
             current = debugEnabled.get();
         } while (!debugEnabled.compareAndSet(current, !current));
-        return !current;
+        boolean enabled = !current;
+        mapUpdater.updateDebugScoreboards(states);
+        return enabled;
     }
 
     /**
@@ -570,6 +572,7 @@ public final class LockViewController {
      */
     private void unlock(Player player, boolean restorePosition) {
         LockViewState state = states.remove(player.getUniqueId());
+        mapUpdater.hideDebugScoreboard(player);
         if (state == null) {
             return;
         }
@@ -752,11 +755,6 @@ public final class LockViewController {
                 }
 
                 state.currentMovement = input;
-                if (debugEnabled.get() && player != null) {
-                    player.sendMessage(FancyMapMessages.debug(input.isIdle()
-                            ? "Đã thả các phím điều khiển."
-                            : "Đang giữ: " + input.describe()));
-                }
             }
         }
     }

@@ -83,6 +83,8 @@ final class LockViewState {
     long renderStartedAtNanos;
     /** Total render duration accumulated for debug metrics. */
     long totalRenderNanos;
+    /** Duration of the most recently completed render. */
+    long lastRenderNanos;
     /** Number of render samples collected. */
     int renderSamples;
     /** Last movement state applied by the tick loop. */

@@ -48,6 +48,7 @@ public final class AsyncChunkSnapshotStore implements AutoCloseable {
      * @param maxChunkZ maximum visible chunk Z
      * @param centerChunkX viewport center chunk X
      * @param centerChunkZ viewport center chunk Z
+     * @param lodLevel overview level; zero schedules every visible chunk
      */
     public void retainViewport(
             int minChunkX,
@@ -55,7 +56,8 @@ public final class AsyncChunkSnapshotStore implements AutoCloseable {
             int minChunkZ,
             int maxChunkZ,
             int centerChunkX,
-            int centerChunkZ
+            int centerChunkZ,
+            int lodLevel
     ) {
         Viewport next = new Viewport(
                 minChunkX,
@@ -63,7 +65,8 @@ public final class AsyncChunkSnapshotStore implements AutoCloseable {
                 minChunkZ,
                 maxChunkZ,
                 centerChunkX,
-                centerChunkZ
+                centerChunkZ,
+                lodLevel
         );
         if (!next.equals(viewport)) {
             viewport = next;
@@ -192,6 +195,12 @@ public final class AsyncChunkSnapshotStore implements AutoCloseable {
         private final int maxZ;
         private final int centerX;
         private final int centerZ;
+        private final int lodLevel;
+        private final int span;
+        private final int minCellX;
+        private final int maxCellX;
+        private final int minCellZ;
+        private final int maxCellZ;
         private final int maxRadius;
         private int radius;
         private int perimeterIndex;
@@ -202,18 +211,27 @@ public final class AsyncChunkSnapshotStore implements AutoCloseable {
                 int minZ,
                 int maxZ,
                 int centerX,
-                int centerZ
+                int centerZ,
+                int lodLevel
         ) {
             this.minX = minX;
             this.maxX = maxX;
             this.minZ = minZ;
             this.maxZ = maxZ;
-            this.centerX = centerX;
-            this.centerZ = centerZ;
+            this.lodLevel = lodLevel;
+            span = 1 << lodLevel;
+            minCellX = Math.floorDiv(minX, span);
+            maxCellX = Math.floorDiv(maxX, span);
+            minCellZ = Math.floorDiv(minZ, span);
+            maxCellZ = Math.floorDiv(maxZ, span);
+            int centerCellX = Math.floorDiv(centerX, span);
+            int centerCellZ = Math.floorDiv(centerZ, span);
             maxRadius = Math.max(
-                    Math.max(Math.abs(minX - centerX), Math.abs(maxX - centerX)),
-                    Math.max(Math.abs(minZ - centerZ), Math.abs(maxZ - centerZ))
+                    Math.max(Math.abs(minCellX - centerCellX), Math.abs(maxCellX - centerCellX)),
+                    Math.max(Math.abs(minCellZ - centerCellZ), Math.abs(maxCellZ - centerCellZ))
             );
+            this.centerX = centerCellX;
+            this.centerZ = centerCellZ;
         }
 
         private boolean contains(int chunkX, int chunkZ) {
@@ -224,8 +242,8 @@ public final class AsyncChunkSnapshotStore implements AutoCloseable {
             while (radius <= maxRadius) {
                 if (radius == 0) {
                     radius = 1;
-                    return contains(centerX, centerZ)
-                            ? new ChunkCoordinate(centerX, centerZ)
+                    return containsCell(centerX, centerZ)
+                            ? sample(centerX, centerZ)
                             : null;
                 }
                 int count = radius * 8;
@@ -235,8 +253,8 @@ public final class AsyncChunkSnapshotStore implements AutoCloseable {
                     continue;
                 }
                 ChunkCoordinate coordinate = perimeterCoordinate(radius, perimeterIndex++);
-                if (contains(coordinate.x(), coordinate.z())) {
-                    return coordinate;
+                if (containsCell(coordinate.x(), coordinate.z())) {
+                    return sample(coordinate.x(), coordinate.z());
                 }
             }
             return null;
@@ -260,6 +278,21 @@ public final class AsyncChunkSnapshotStore implements AutoCloseable {
             return new ChunkCoordinate(centerX - ring, centerZ + ring - 1 - index);
         }
 
+        private boolean containsCell(int cellX, int cellZ) {
+            return cellX >= minCellX && cellX <= maxCellX
+                    && cellZ >= minCellZ && cellZ <= maxCellZ;
+        }
+
+        /** Chooses the center chunk of a LOD cell, clamped at partial viewport edges. */
+        private ChunkCoordinate sample(int cellX, int cellZ) {
+            int sampleX = cellX * span + span / 2;
+            int sampleZ = cellZ * span + span / 2;
+            return new ChunkCoordinate(
+                    Math.max(minX, Math.min(maxX, sampleX)),
+                    Math.max(minZ, Math.min(maxZ, sampleZ))
+            );
+        }
+
         @Override
         public boolean equals(Object other) {
             if (!(other instanceof Viewport viewport)) {
@@ -267,7 +300,8 @@ public final class AsyncChunkSnapshotStore implements AutoCloseable {
             }
             return minX == viewport.minX && maxX == viewport.maxX
                     && minZ == viewport.minZ && maxZ == viewport.maxZ
-                    && centerX == viewport.centerX && centerZ == viewport.centerZ;
+                    && centerX == viewport.centerX && centerZ == viewport.centerZ
+                    && lodLevel == viewport.lodLevel;
         }
 
         @Override
@@ -277,7 +311,8 @@ public final class AsyncChunkSnapshotStore implements AutoCloseable {
             result = 31 * result + Integer.hashCode(minZ);
             result = 31 * result + Integer.hashCode(maxZ);
             result = 31 * result + Integer.hashCode(centerX);
-            return 31 * result + Integer.hashCode(centerZ);
+            result = 31 * result + Integer.hashCode(centerZ);
+            return 31 * result + Integer.hashCode(lodLevel);
         }
     }
 }

@@ -18,6 +18,8 @@ import org.bukkit.inventory.ItemStack;
 import org.bukkit.plugin.java.JavaPlugin;
 
 import java.util.HashSet;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
@@ -42,6 +44,7 @@ final class LockViewMapUpdater {
     private final WaypointDisplaySettings waypointDisplaySettings;
     private final ClientCanvasDisplayHelper canvasDisplays;
     private final BooleanSupplier debugEnabled;
+    private final LockViewDebugScoreboard debugScoreboard = new LockViewDebugScoreboard();
 
     /**
      * Creates a map update coordinator.
@@ -120,12 +123,13 @@ final class LockViewMapUpdater {
                 changed |= previous != state.blocksPerPixel;
             }
 
-            Waypoint hoveredWaypoint = waypointManager.findHovered(
+            Waypoint hoveredWaypoint = waypointDisplaySettings.visibleAt(state.blocksPerPixel)
+                    ? waypointManager.findHovered(
                     state.world,
                     state.mapCenterX,
                     state.mapCenterZ,
                     state.blocksPerPixel
-            );
+            ) : null;
             String hoveredId = hoveredWaypoint == null ? null : hoveredWaypoint.id();
             boolean waypointChanged = !Objects.equals(state.hoveredWaypointId, hoveredId);
             if (waypointChanged) {
@@ -168,7 +172,7 @@ final class LockViewMapUpdater {
     }
 
     /**
-     * Records render duration and emits periodic debug metrics.
+     * Records render duration, updates the debug sidebar, and logs periodic metrics.
      *
      * @param player target player
      * @param state active map state
@@ -181,6 +185,10 @@ final class LockViewMapUpdater {
         state.renderStartedAtNanos = 0L;
         state.renderSamples++;
         state.totalRenderNanos += elapsedNanos;
+        state.lastRenderNanos = elapsedNanos;
+        if (debugEnabled.getAsBoolean()) {
+            debugScoreboard.show(player, debugLines(state));
+        }
         boolean slowRender = elapsedNanos >= 100_000_000L;
         if (!debugEnabled.getAsBoolean()
                 || (!slowRender && state.renderSamples % 10 != 1)) {
@@ -194,15 +202,6 @@ final class LockViewMapUpdater {
         long usedHeapMb = (runtime.totalMemory() - runtime.freeMemory())
                 / (1024L * 1024L);
         long maxHeapMb = runtime.maxMemory() / (1024L * 1024L);
-        player.sendMessage(FancyMapMessages.debug(String.format(
-                Locale.ROOT,
-                "Map render: %.1f ms | avg: %.1f ms | samples: %d | heap: %d/%d MB",
-                lastMillis,
-                averageMillis,
-                state.renderSamples,
-                usedHeapMb,
-                maxHeapMb
-        )));
         plugin.getLogger().info(FancyMapMessages.consoleDebug(
                 "player=" + player.getName()
                         + " renderLastMs=" + String.format(
@@ -222,6 +221,53 @@ final class LockViewMapUpdater {
                         + " " + state.mapSnapshotStore.debugSummary()
                         + " " + renderCache.debugSummary(state.world)
         ));
+    }
+
+    /** Refreshes or removes debug sidebars after the global debug flag changes. */
+    void updateDebugScoreboards(Map<UUID, LockViewState> states) {
+        for (Map.Entry<UUID, LockViewState> entry : states.entrySet()) {
+            Player player = plugin.getServer().getPlayer(entry.getKey());
+            if (player == null || !player.isOnline()) {
+                continue;
+            }
+            if (debugEnabled.getAsBoolean()) {
+                debugScoreboard.show(player, debugLines(entry.getValue()));
+            } else {
+                debugScoreboard.hide(player);
+            }
+        }
+    }
+
+    /** Removes one player's debug sidebar when their map session ends. */
+    void hideDebugScoreboard(Player player) {
+        debugScoreboard.hide(player);
+    }
+
+    /** Creates all numerical diagnostics currently emitted to the console. */
+    private List<String> debugLines(LockViewState state) {
+        Runtime runtime = Runtime.getRuntime();
+        long usedHeapMb = (runtime.totalMemory() - runtime.freeMemory())
+                / (1024L * 1024L);
+        long maxHeapMb = runtime.maxMemory() / (1024L * 1024L);
+        double lastMillis = state.lastRenderNanos / 1_000_000.0D;
+        double averageMillis = state.renderSamples == 0 ? 0.0D
+                : state.totalRenderNanos / (double) state.renderSamples / 1_000_000.0D;
+        List<String> lines = new ArrayList<>(15);
+        lines.add(String.format(Locale.ROOT, "§bRender: §f%.1f/%.1f ms", lastMillis, averageMillis));
+        lines.add("§bSamples: §f" + state.renderSamples);
+        lines.add("§bHeap: §f" + usedHeapMb + "/" + maxHeapMb + " MB");
+        lines.add("§bHidden: §f" + state.hiddenEntities.size()
+                + " entities, " + state.hiddenPlayers.size() + " players");
+        addSummaryLines(lines, state.mapSnapshotStore.debugSummary());
+        addSummaryLines(lines, renderCache.debugSummary(state.world));
+        return lines;
+    }
+
+    /** Adds the compact scheduler or cache counters used by console diagnostics. */
+    private void addSummaryLines(List<String> lines, String summary) {
+        for (String counter : summary.split(", ")) {
+            lines.add("§7" + counter);
+        }
     }
 
     /**
@@ -247,6 +293,7 @@ final class LockViewMapUpdater {
                 textureManager.cursor(),
                 textureManager.player(),
                 waypointManager.all(),
+                waypointDisplaySettings.visibleAt(state.blocksPerPixel),
                 state.hoveredWaypointId,
                 textureManager.waypoint(),
                 textureManager.waypointHover(),
@@ -272,7 +319,8 @@ final class LockViewMapUpdater {
             double blocksPerPixel
     ) {
         Set<String> visible = new HashSet<>();
-        for (Waypoint waypoint : waypointManager.all()) {
+        if (waypointDisplaySettings.visibleAt(blocksPerPixel)) {
+            for (Waypoint waypoint : waypointManager.all()) {
             if (!waypoint.worldName().equals(state.world.getName())
                     || waypoint.iconMaterial() == null) {
                 continue;
@@ -305,6 +353,7 @@ final class LockViewMapUpdater {
                     SpigotConversionUtil.fromBukkitItemStack(new ItemStack(material)),
                     0.5D
             );
+        }
         }
         for (String key : state.visibleWaypointItemDisplays) {
             if (!visible.contains(key)) {

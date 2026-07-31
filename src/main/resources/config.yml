@@ -5,7 +5,7 @@ map:
   map-pan-speed: 4.0
   fast-move-multiplier: 2.0
   min-zoom: 0.25
-  max-zoom: 4.0
+  max-zoom: 4096.0
   default-zoom: 1.0
   load-ungenerated-chunks: false
 chunk-scheduler:
@@ -18,7 +18,13 @@ chunk-scheduler:
 map-cache:
   # Approximate rendered chunks held in memory per world. Disk regions are retained indefinitely.
   max-entries: 131072
+map-lod:
+  # Level zero is one chunk; each additional level covers a 2x2 group below it.
+  # 22 is the highest useful level within the default Minecraft world border.
+  max-level: 12
 waypoint-display:
+  # Hide waypoint icons, item displays and tooltip beyond this blocks-per-pixel zoom.
+  max-zoom: 64.0
   # Tokens: %fancymap_waypoint_id%, %fancymap_waypoint_name%, %fancymap_waypoint_world%,
   # %fancymap_waypoint_x%, %fancymap_waypoint_y%, %fancymap_waypoint_z%, %fancymap_waypoint_icon%.
   tooltip: "<yellow>%fancymap_waypoint_name%<newline><white>Press <green>F <white>to teleport"

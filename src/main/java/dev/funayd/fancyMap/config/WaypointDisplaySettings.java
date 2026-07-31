@@ -25,6 +25,7 @@ public final class WaypointDisplaySettings {
     ) {
         this.config = config;
         this.placeholders = placeholders;
+        config.registerDouble(path("max-zoom"), 64.0D, true);
         config.registerString(
                 path("tooltip"),
                 "<yellow>%fancymap_waypoint_name%<newline><white>Press <green>F <white>to teleport"
@@ -42,6 +43,11 @@ public final class WaypointDisplaySettings {
     /** Renders the configured map tooltip for one hovered waypoint. */
     public Component tooltip(Player player, Waypoint waypoint) {
         return component(player, waypoint, config.getString(path("tooltip")));
+    }
+
+    /** Returns whether waypoint icons and tooltip remain useful at this map scale. */
+    public boolean visibleAt(double blocksPerPixel) {
+        return blocksPerPixel <= config.getDouble(path("max-zoom"));
     }
 
     /** Renders the configured GUI item name for one waypoint. */

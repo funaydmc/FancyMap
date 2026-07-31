@@ -15,7 +15,7 @@ public final class MapSettings {
     private static final double DEFAULT_MAP_PAN_SPEED = 4.0D;
     private static final double DEFAULT_FAST_MOVE_MULTIPLIER = 2.0D;
     private static final double DEFAULT_MIN_ZOOM = 0.25D;
-    private static final double DEFAULT_MAX_ZOOM = 4.0D;
+    private static final double DEFAULT_MAX_ZOOM = 4_096.0D;
     private static final double DEFAULT_DEFAULT_ZOOM = 1.0D;
     private static final String ROOT = "map.";
     private static final String LOAD_UNGENERATED_CHUNKS = "load-ungenerated-chunks";

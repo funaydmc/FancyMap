@@ -8,6 +8,7 @@ import org.bukkit.plugin.java.JavaPlugin;
 
 import java.util.List;
 import java.util.Map;
+import java.util.Arrays;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.Executor;
@@ -47,6 +48,7 @@ public final class WorldMapRenderer implements AsyncMapCanvasRenderer {
     private final MapTexture waypointHoverTexture;
     private final Map<String, MapTexture> customWaypointTextures;
     private final List<Waypoint> waypoints;
+    private final boolean showWaypoints;
     private final String hoveredWaypointId;
     private final boolean debugMaterialWaypoints;
 
@@ -79,6 +81,7 @@ public final class WorldMapRenderer implements AsyncMapCanvasRenderer {
             MapTexture cursorTexture,
             MapTexture playerTexture,
             List<Waypoint> waypoints,
+            boolean showWaypoints,
             String hoveredWaypointId,
             MapTexture waypointTexture,
             MapTexture waypointHoverTexture,
@@ -103,6 +106,7 @@ public final class WorldMapRenderer implements AsyncMapCanvasRenderer {
         this.cursorTexture = Objects.requireNonNull(cursorTexture, "cursorTexture");
         this.playerTexture = Objects.requireNonNull(playerTexture, "playerTexture");
         this.waypoints = Objects.requireNonNull(waypoints, "waypoints");
+        this.showWaypoints = showWaypoints;
         this.hoveredWaypointId = hoveredWaypointId;
         this.waypointTexture = Objects.requireNonNull(waypointTexture, "waypointTexture");
         this.waypointHoverTexture = Objects.requireNonNull(
@@ -134,14 +138,23 @@ public final class WorldMapRenderer implements AsyncMapCanvasRenderer {
         int maxChunkZ = Math.floorDiv(maxBlockZ, 16);
         int centerChunkX = Math.floorDiv((int) Math.floor(centerX), 16);
         int centerChunkZ = Math.floorDiv((int) Math.floor(centerZ), 16);
+        int lodLevel = renderCache.lodLevel(blocksPerPixel);
         snapshotStore.retainViewport(
                 minChunkX,
                 maxChunkX,
                 minChunkZ,
                 maxChunkZ,
                 centerChunkX,
-                centerChunkZ
+                centerChunkZ,
+                lodLevel
         );
+
+        if (lodLevel > 0) {
+            return CompletableFuture.supplyAsync(
+                    () -> renderLodCanvas(lodLevel, minChunkX, maxChunkX, minChunkZ, maxChunkZ),
+                    executor
+            );
+        }
 
         int chunkCountX = maxChunkX - minChunkX + 1;
         int chunkCountZ = maxChunkZ - minChunkZ + 1;
@@ -168,7 +181,61 @@ public final class WorldMapRenderer implements AsyncMapCanvasRenderer {
                             minChunkZ,
                             chunkCountZ
                     );
-                }, executor);
+        }, executor);
+    }
+
+    /** Renders one cached overview color per LOD cell instead of reading every detailed chunk. */
+    private MapCanvas renderLodCanvas(
+            int level,
+            int minChunkX,
+            int maxChunkX,
+            int minChunkZ,
+            int maxChunkZ
+    ) {
+        int span = renderCache.lodSpanChunks(level);
+        int minCellX = Math.floorDiv(minChunkX, span);
+        int maxCellX = Math.floorDiv(maxChunkX, span);
+        int minCellZ = Math.floorDiv(minChunkZ, span);
+        int maxCellZ = Math.floorDiv(maxChunkZ, span);
+        int cellCountZ = maxCellZ - minCellZ + 1;
+        int[] cells = new int[(maxCellX - minCellX + 1) * cellCountZ];
+        Arrays.fill(cells, BLACK);
+        for (int cellX = minCellX; cellX <= maxCellX; cellX++) {
+            for (int cellZ = minCellZ; cellZ <= maxCellZ; cellZ++) {
+                int color = renderCache.getLodColor(world, level, cellX, cellZ);
+                if (color >= 0) {
+                    cells[(cellX - minCellX) * cellCountZ + cellZ - minCellZ] = color;
+                }
+            }
+        }
+        renderCache.touchLod(world, level, minCellX, maxCellX, minCellZ, maxCellZ);
+
+        MapCanvas canvas = new MapCanvas(width, height, BLACK);
+        int[] cellColumns = new int[width];
+        int[] cellRows = new int[height];
+        for (int pixelX = 0; pixelX < width; pixelX++) {
+            int blockX = (int) Math.floor(
+                    centerX + (pixelX - width / 2.0D) * blocksPerPixel
+            );
+            cellColumns[pixelX] = Math.floorDiv(Math.floorDiv(blockX, 16), span) - minCellX;
+        }
+        for (int pixelY = 0; pixelY < height; pixelY++) {
+            int blockZ = (int) Math.floor(
+                    centerZ - (pixelY - height / 2.0D) * blocksPerPixel
+            );
+            cellRows[pixelY] = Math.floorDiv(Math.floorDiv(blockZ, 16), span) - minCellZ;
+        }
+        for (int pixelY = 0; pixelY < height; pixelY++) {
+            for (int pixelX = 0; pixelX < width; pixelX++) {
+                canvas.setPixelUnchecked(
+                        pixelX,
+                        pixelY,
+                        (byte) cells[cellColumns[pixelX] * cellCountZ + cellRows[pixelY]]
+                );
+            }
+        }
+        drawMarkers(canvas);
+        return canvas;
     }
 
     /** Composes cached chunk colors into the requested canvas. */
@@ -235,7 +302,8 @@ public final class WorldMapRenderer implements AsyncMapCanvasRenderer {
         if (showPlayerMarker) {
             playerTexture.drawCentered(canvas, playerPixelX, playerPixelY);
         }
-        for (Waypoint waypoint : waypoints) {
+        if (showWaypoints) {
+            for (Waypoint waypoint : waypoints) {
             if (!waypoint.worldName().equals(world.getName())) {
                 continue;
             }
@@ -268,6 +336,7 @@ public final class WorldMapRenderer implements AsyncMapCanvasRenderer {
                     waypointTexture
             );
             texture.drawCentered(canvas, waypointPixelX, waypointPixelY);
+        }
         }
         cursorTexture.drawCentered(canvas, centerX, centerY);
     }

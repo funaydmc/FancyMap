@@ -22,6 +22,12 @@ java {
 }
 
 tasks {
+    register<JavaExec>("lodSelfCheck") {
+        group = "verification"
+        classpath = sourceSets.main.get().runtimeClasspath
+        mainClass.set("dev.funayd.fancyMap.map.LodMathSelfCheck")
+    }
+
     runServer {
         // Configure the Minecraft version for our task.
         // This is the only required configuration besides applying the plugin.
