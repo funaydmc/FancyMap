@@ -15,6 +15,9 @@ chunk-scheduler:
   snapshot-workers: 2
   max-candidate-scans-per-tick: 512
   max-retries: 3
+map-cache:
+  # Approximate rendered chunks held in memory per world. Disk regions are retained indefinitely.
+  max-entries: 131072
 waypoint-display:
   # Tokens: %fancymap_waypoint_id%, %fancymap_waypoint_name%, %fancymap_waypoint_world%,
   # %fancymap_waypoint_x%, %fancymap_waypoint_y%, %fancymap_waypoint_z%, %fancymap_waypoint_icon%.

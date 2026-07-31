@@ -8,6 +8,7 @@ import dev.funayd.fancyMap.config.MapSettings;
 import dev.funayd.fancyMap.config.WaypointDisplaySettings;
 import dev.funayd.fancyMap.input.KeyActionBindings;
 import dev.funayd.fancyMap.input.MovementInput;
+import dev.funayd.fancyMap.input.NormalizedInput;
 import dev.funayd.fancyMap.map.ClientCanvasDisplayHelper;
 import dev.funayd.fancyMap.map.GlobalChunkSnapshotScheduler;
 import dev.funayd.fancyMap.map.MapOverlay;
@@ -666,19 +667,15 @@ public final class LockViewController {
         });
     }
 
-    /** Updates configured tap bindings from the packet listener. */
-    void handleKeyInput(Player player, MovementInput input) {
+    /** Routes every normalized client input through map navigation and key bindings. */
+    void handleInput(Player player, LockViewState state, NormalizedInput input) {
+        if (input.movement() != null) {
+            state.movementInput.add(input.movement());
+        }
+        if (input.scrollDelta() != 0) {
+            state.zoomInput.add(input.scrollDelta());
+        }
         keyActionBindings.handle(player, input);
-    }
-
-    /** Triggers one configured instant action, such as the off-hand F key. */
-    void triggerKeyAction(Player player, String keyName) {
-        keyActionBindings.trigger(player, keyName);
-    }
-
-    /** Cancels active taps when another input family is used. */
-    void cancelKeyActions(Player player) {
-        keyActionBindings.cancel(player);
     }
 
     /** Runs one configured command on the Bukkit main thread. */

@@ -17,6 +17,8 @@ FancyMap is a Paper 1.21.11 plugin that opens a client-side world map with keybo
 
 The plugin creates `plugins/FancyMap/config.yml`, waypoint data and a `textures` folder. Add custom `PNG` textures there, then run `/fm reload`.
 
+See [cache architecture](docs/cache-architecture.md) for the map loading, storage, RAM and disk-cache lifecycle.
+
 ## Commands
 
 | Command | Description |

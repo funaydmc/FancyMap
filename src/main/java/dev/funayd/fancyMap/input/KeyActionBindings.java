@@ -1,13 +1,13 @@
 package dev.funayd.fancyMap.input;
 
 import dev.funayd.fancyMap.config.ConfigManager;
+import dev.funayd.fancyMap.input.NormalizedInput.Key;
 import org.bukkit.entity.Player;
 
 import java.util.ArrayList;
 import java.util.EnumSet;
 import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
@@ -72,12 +72,20 @@ public final class KeyActionBindings {
         config.save();
     }
 
-    /** Updates chord state from one complete client movement input state. */
-    public void handle(Player player, MovementInput input) {
+    /** Handles one normalized client input event. */
+    public void handle(Player player, NormalizedInput input) {
+        if (input.movement() != null) {
+            handleHeldKeys(player, input.heldKeys());
+        }
+        if (input.instantKey() != null) {
+            handleInstantKey(player, input.instantKey());
+        }
+    }
+
+    private void handleHeldKeys(Player player, Set<Key> pressed) {
         ConcurrentMap<Chord, TapState> taps = activeTaps.computeIfAbsent(
                 player.getUniqueId(), ignored -> new ConcurrentHashMap<>()
         );
-        Set<Key> pressed = Key.pressed(input);
         pressedInputs.put(player.getUniqueId(), pressed);
         List<Binding> completed = new ArrayList<>();
 
@@ -127,12 +135,8 @@ public final class KeyActionBindings {
         pressedInputs.remove(player.getUniqueId());
     }
 
-    /** Runs the configured action matching one instantaneous non-movement key. */
-    public void trigger(Player player, String keyName) {
-        Key key = Key.from(keyName);
-        if (key == null || key.isMovementInput()) {
-            return;
-        }
+    /** Runs actions matching one instant key plus the last normalized held-key state. */
+    private void handleInstantKey(Player player, Key key) {
         Set<Key> pressed = EnumSet.noneOf(Key.class);
         pressed.addAll(pressedInputs.getOrDefault(player.getUniqueId(), Set.of()));
         pressed.add(key);
@@ -148,69 +152,19 @@ public final class KeyActionBindings {
     private static void verifyChordParser() {
         Chord chord = Chord.parse("space+w");
         Chord offHand = Chord.parse("f");
+        NormalizedInput shifted = NormalizedInput.movement(
+                new MovementInput(false, false, false, false, false, true)
+        );
         if (chord == null || chord.keys().size() != 2 || offHand == null
-                || Chord.parse("space+space") != null) {
+                || Chord.parse("space+space") != null
+                || !shifted.heldKeys().contains(Key.SHIFT)
+                || NormalizedInput.press(Key.F).instantKey() != Key.F) {
             throw new IllegalStateException("Invalid key chord parser");
         }
     }
 
     private static String stripSlash(String command) {
         return command.startsWith("/") ? command.substring(1) : command;
-    }
-
-    /** Supported keys for action bindings. */
-    private enum Key {
-        FORWARD("forward", "w"),
-        BACKWARD("backward", "s"),
-        LEFT("left", "a"),
-        RIGHT("right", "d"),
-        SPACE("space", "jump"),
-        SHIFT("shift", "sneak"),
-        F("f", "swap-offhand");
-
-        private final String[] names;
-
-        Key(String... names) {
-            this.names = names;
-        }
-
-        private static Key from(String name) {
-            String normalized = name.toLowerCase(Locale.ROOT);
-            for (Key key : values()) {
-                for (String alias : key.names) {
-                    if (alias.equals(normalized)) {
-                        return key;
-                    }
-                }
-            }
-            return null;
-        }
-
-        private static Set<Key> pressed(MovementInput input) {
-            Set<Key> pressed = EnumSet.noneOf(Key.class);
-            for (Key key : values()) {
-                if (key.isPressed(input)) {
-                    pressed.add(key);
-                }
-            }
-            return Set.copyOf(pressed);
-        }
-
-        private boolean isPressed(MovementInput input) {
-            return switch (this) {
-                case FORWARD -> input.forward();
-                case BACKWARD -> input.backward();
-                case LEFT -> input.left();
-                case RIGHT -> input.right();
-                case SPACE -> input.jump();
-                case SHIFT -> input.shift();
-                case F -> false;
-            };
-        }
-
-        private boolean isMovementInput() {
-            return this != F;
-        }
     }
 
     /** Immutable parsed chord; all listed keys must be held and no others may be held. */

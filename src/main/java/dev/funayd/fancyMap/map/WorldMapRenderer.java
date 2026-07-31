@@ -155,6 +155,13 @@ public final class WorldMapRenderer implements AsyncMapCanvasRenderer {
                         chunkColors[canvasIndex] = renderCache.get(world, chunkX, chunkZ);
                         }
                     }
+                    renderCache.touch(
+                            world,
+                            minChunkX,
+                            maxChunkX,
+                            minChunkZ,
+                            maxChunkZ
+                    );
                     return renderCanvas(
                             chunkColors,
                             minChunkX,

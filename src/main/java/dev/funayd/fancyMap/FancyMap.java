@@ -6,6 +6,7 @@ import dev.funayd.fancyMap.command.FancyMapCommand;
 import dev.funayd.fancyMap.config.ConfigManager;
 import dev.funayd.fancyMap.config.ChunkSchedulerSettings;
 import dev.funayd.fancyMap.config.MapSettings;
+import dev.funayd.fancyMap.config.MapCacheSettings;
 import dev.funayd.fancyMap.config.WaypointDisplaySettings;
 import dev.funayd.fancyMap.map.MapCacheListener;
 import dev.funayd.fancyMap.map.MapOverlay;
@@ -38,6 +39,7 @@ public final class FancyMap extends JavaPlugin {
         AtomicBoolean debugEnabled = new AtomicBoolean();
         ConfigManager configManager = new ConfigManager(this);
         MapSettings mapSettings = new MapSettings(configManager);
+        MapCacheSettings mapCacheSettings = new MapCacheSettings(configManager);
         ChunkSchedulerSettings chunkSchedulerSettings = new ChunkSchedulerSettings(configManager);
         WaypointPlaceholderHandler waypointPlaceholderHandler = new WaypointPlaceholderHandler(this);
         WaypointDisplaySettings waypointDisplaySettings = new WaypointDisplaySettings(
@@ -47,7 +49,10 @@ public final class FancyMap extends JavaPlugin {
         configManager.save();
         MapOverlay mapOverlay = new MapOverlay(this, debugEnabled::get);
         ClientCanvasDisplayHelper canvasDisplays = new ClientCanvasDisplayHelper(mapOverlay);
-        PersistentChunkRenderCache mapRenderCache = new PersistentChunkRenderCache(this);
+        PersistentChunkRenderCache mapRenderCache = new PersistentChunkRenderCache(
+                this,
+                mapCacheSettings::maxEntries
+        );
         WaypointManager waypointManager = new WaypointManager(configManager);
         lockViewController = new LockViewController(
                 this,

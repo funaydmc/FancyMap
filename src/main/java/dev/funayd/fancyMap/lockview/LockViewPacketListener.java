@@ -11,6 +11,7 @@ import com.github.retrooper.packetevents.wrapper.play.client.WrapperPlayClientPl
 import com.github.retrooper.packetevents.wrapper.play.client.WrapperPlayClientSteerVehicle;
 import com.github.retrooper.packetevents.wrapper.play.server.WrapperPlayServerHeldItemChange;
 import dev.funayd.fancyMap.input.MovementInput;
+import dev.funayd.fancyMap.input.NormalizedInput;
 import org.bukkit.entity.Player;
 
 /**
@@ -47,12 +48,13 @@ final class LockViewPacketListener implements PacketListener {
         if (event.getPacketType() == PacketType.Play.Client.STEER_VEHICLE) {
             WrapperPlayClientSteerVehicle packet =
                     new WrapperPlayClientSteerVehicle(event);
-            state.movementInput.add(MovementInput.from(
+            MovementInput input = MovementInput.from(
                     packet.getSideways(),
                     packet.getForward(),
                     packet.isJump(),
                     packet.isUnmount()
-            ));
+            );
+            controller.handleInput(player, state, NormalizedInput.movement(input));
             if (packet.isUnmount()) {
                 packet.setUnmount(false);
                 event.markForReEncode(true);
@@ -71,8 +73,7 @@ final class LockViewPacketListener implements PacketListener {
                     packet.isJump(),
                     packet.isShift()
             );
-            state.movementInput.add(input);
-            controller.handleKeyInput(player, input);
+            controller.handleInput(player, state, NormalizedInput.movement(input));
             if (packet.isShift()) {
                 packet.setShift(false);
                 event.markForReEncode(true);
@@ -81,7 +82,6 @@ final class LockViewPacketListener implements PacketListener {
         }
 
         if (event.getPacketType() == PacketType.Play.Client.HELD_ITEM_CHANGE) {
-            controller.cancelKeyActions(player);
             WrapperPlayClientHeldItemChange packet =
                     new WrapperPlayClientHeldItemChange(event);
             int currentSlot = packet.getSlot();
@@ -89,7 +89,7 @@ final class LockViewPacketListener implements PacketListener {
             int delta = hotbarDelta(previousSlot, currentSlot);
             state.lastHotbarSlot = previousSlot;
             if (delta != 0) {
-                state.zoomInput.add(delta);
+                controller.handleInput(player, state, NormalizedInput.scroll(delta));
             }
             event.setCancelled(true);
             controller.restoreHotbar(player, state, previousSlot);
@@ -101,7 +101,7 @@ final class LockViewPacketListener implements PacketListener {
                     new WrapperPlayClientPlayerDigging(event);
             if (packet.getAction() == DiggingAction.SWAP_ITEM_WITH_OFFHAND) {
                 event.setCancelled(true);
-                controller.triggerKeyAction(player, "f");
+                controller.handleInput(player, state, NormalizedInput.press(NormalizedInput.Key.F));
             }
             return;
         }
