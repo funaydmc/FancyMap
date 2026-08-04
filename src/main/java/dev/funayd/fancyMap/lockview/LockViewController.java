@@ -288,6 +288,11 @@ public final class LockViewController {
      * @return false when the waypoint or its world is unavailable
      */
     public boolean focusWaypoint(Player player, String id) {
+        return focusWaypoint(player, id, false);
+    }
+
+    /** Opens the map when needed and centers it on a waypoint without command feedback. */
+    public boolean focusWaypoint(Player player, String id, boolean silent) {
         if (!FancyMapPermissions.has(player, FancyMapPermissions.USE)) {
             return false;
         }
@@ -296,34 +301,49 @@ public final class LockViewController {
         if (waypointLocation == null) {
             return false;
         }
-        return focus(player, waypointLocation.getWorld(), waypoint.x(), waypoint.z());
+        return focus(player, waypointLocation.getWorld(), waypoint.x(), waypoint.z(), silent);
     }
 
     /** Centers the open map on one coordinate, opening the player's current world when needed. */
     public boolean gotoPosition(Player player, double x, double z) {
+        return gotoPosition(player, x, z, false);
+    }
+
+    /** Centers the map on one coordinate, optionally suppressing lock feedback. */
+    public boolean gotoPosition(Player player, double x, double z, boolean silent) {
         if (!FancyMapPermissions.has(player, FancyMapPermissions.USE)
                 || !Double.isFinite(x) || !Double.isFinite(z)) {
             return false;
         }
         LockViewState state = stateFor(player);
         return state == null
-                ? lock(player, player.getWorld(), x, z)
-                : focus(player, state.world, x, z);
+                ? lock(player, player.getWorld(), x, z, silent)
+                : focus(player, state.world, x, z, silent);
     }
 
     /** Opens or switches the map to a world and centers it on the supplied coordinates. */
     public boolean viewWorld(Player player, World world, double x, double z) {
+        return viewWorld(player, world, x, z, false);
+    }
+
+    /** Opens or switches the map world, optionally suppressing lock feedback. */
+    public boolean viewWorld(Player player, World world, double x, double z, boolean silent) {
         if (!FancyMapPermissions.has(player, FancyMapPermissions.USE)
                 || world == null || !Double.isFinite(x) || !Double.isFinite(z)) {
             return false;
         }
-        return focus(player, world, x, z);
+        return focus(player, world, x, z, silent);
     }
 
     /** Applies a world and center change to the current map session. */
     private boolean focus(Player player, World world, double x, double z) {
+        return focus(player, world, x, z, false);
+    }
+
+    /** Applies a world and center change while retaining command feedback preference. */
+    private boolean focus(Player player, World world, double x, double z, boolean silent) {
         if (!isLocked(player)) {
-            return lock(player, world, x, z);
+            return lock(player, world, x, z, silent);
         }
         LockViewState state = stateFor(player);
         if (state == null) {
@@ -372,15 +392,28 @@ public final class LockViewController {
      */
     /** Creates the camera, visibility state and asynchronous map session. */
     private boolean lock(Player player) {
-        return lock(player, null, 0.0D, 0.0D);
+        return lock(player, null, 0.0D, 0.0D, false);
     }
 
     /** Creates a session that initially renders the supplied map world when present. */
     private boolean lock(Player player, World requestedWorld, double requestedCenterX, double requestedCenterZ) {
+        return lock(player, requestedWorld, requestedCenterX, requestedCenterZ, false);
+    }
+
+    /** Creates a session while retaining command feedback preference. */
+    private boolean lock(
+            Player player,
+            World requestedWorld,
+            double requestedCenterX,
+            double requestedCenterZ,
+            boolean silent
+    ) {
         if (player.isInsideVehicle()) {
-            player.sendMessage(FancyMapMessages.text(
-                    "§cKhông thể khóa khi đang ngồi trên phương tiện khác."
-            ));
+            if (!silent) {
+                player.sendMessage(FancyMapMessages.text(
+                        "§cKhông thể khóa khi đang ngồi trên phương tiện khác."
+                ));
+            }
             return false;
         }
 
